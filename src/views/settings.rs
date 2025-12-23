@@ -83,49 +83,6 @@ pub fn Settings() -> Element {
                     }
                 }
 
-                // Zoom Mode
-                div { class: "mb-6",
-                    label { class: "block text-sm font-medium mb-2", "Smart Zoom" }
-                    select {
-                        class: "w-full bg-gray-800 border border-gray-700 rounded-lg p-3",
-                        value: format!("{:?}", config().zoom_mode),
-                        onchange: move |e| {
-                            let mut c = config();
-                            c.zoom_mode = match e.value().as_str() {
-                                "FollowCursor" => ZoomMode::FollowCursor,
-                                "ClickToZoom" => ZoomMode::ClickToZoom,
-                                "SmartAI" => ZoomMode::SmartAI,
-                                _ => ZoomMode::None,
-                            };
-                            config.set(c);
-                        },
-                        option { value: "None", "Disabled" }
-                        option { value: "FollowCursor", "Follow Cursor" }
-                        option { value: "ClickToZoom", "Zoom on Click" }
-                        option { value: "SmartAI", "Smart AI (Experimental)" }
-                    }
-                }
-
-                // Zoom Level
-                div { class: "mb-6",
-                    label { class: "block text-sm font-medium mb-2",
-                        "Zoom Level: {config().zoom_level:.1}x"
-                    }
-                    input {
-                        r#type: "range",
-                        class: "w-full",
-                        min: "1.0",
-                        max: "3.0",
-                        step: "0.1",
-                        value: config().zoom_level.to_string(),
-                        oninput: move |e| {
-                            let mut c = config();
-                            c.zoom_level = e.value().parse().unwrap_or(1.5);
-                            config.set(c);
-                        }
-                    }
-                }
-
                 // FPS
                 div { class: "mb-6",
                     label { class: "block text-sm font-medium mb-2", "Frame Rate" }

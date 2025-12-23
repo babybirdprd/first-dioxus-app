@@ -12,7 +12,7 @@ mod zoom;
 use capture::{start_recording, stop_recording, RecorderConfig};
 use config::Config;
 use hotkey::HotkeyManager;
-use views::{Blog, Home, Navbar, Settings};
+use views::{Dashboard, Navbar, Settings};
 use zoom::{start_event_logging, stop_event_logging, update_event_logging};
 
 #[derive(Debug, Clone, Routable, PartialEq)]
@@ -20,9 +20,7 @@ use zoom::{start_event_logging, stop_event_logging, update_event_logging};
 enum Route {
     #[layout(Navbar)]
         #[route("/")]
-        Home {},
-        #[route("/blog/:id")]
-        Blog { id: i32 },
+        Dashboard {},
         #[route("/settings")]
         Settings {},
 }
