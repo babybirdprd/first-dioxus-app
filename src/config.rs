@@ -32,6 +32,14 @@ pub enum ZoomMode {
     SmartAI,
 }
 
+/// What to capture
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub enum CaptureTarget {
+    #[default]
+    PrimaryMonitor,
+    ForegroundWindow,
+}
+
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -44,6 +52,7 @@ pub struct Config {
     pub fps: u32,
     pub show_countdown: bool,
     pub countdown_seconds: u32,
+    pub capture_target: CaptureTarget,
 }
 
 impl Default for Config {
@@ -62,6 +71,7 @@ impl Default for Config {
             fps: 30,
             show_countdown: true,
             countdown_seconds: 3,
+            capture_target: CaptureTarget::default(),
         }
     }
 }

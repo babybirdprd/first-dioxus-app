@@ -1,6 +1,6 @@
 //! Settings view component
 
-use crate::config::{AudioMode, Config, OutputFormat, ZoomMode};
+use crate::config::{AudioMode, CaptureTarget, Config, OutputFormat, ZoomMode};
 use dioxus::prelude::*;
 
 /// Settings page component
@@ -19,6 +19,25 @@ pub fn Settings() -> Element {
         div { class: "min-h-screen bg-gray-900 text-white p-8",
             div { class: "max-w-2xl mx-auto",
                 h1 { class: "text-3xl font-bold mb-8", "⚙️ Settings" }
+
+                // Capture Target
+                div { class: "mb-6",
+                    label { class: "block text-sm font-medium mb-2", "Capture Source" }
+                    select {
+                        class: "w-full bg-gray-800 border border-gray-700 rounded-lg p-3",
+                        value: format!("{:?}", config().capture_target),
+                        onchange: move |e| {
+                            let mut c = config();
+                            c.capture_target = match e.value().as_str() {
+                                "ForegroundWindow" => CaptureTarget::ForegroundWindow,
+                                _ => CaptureTarget::PrimaryMonitor,
+                            };
+                            config.set(c);
+                        },
+                        option { value: "PrimaryMonitor", "Primary Monitor (Full Screen)" }
+                        option { value: "ForegroundWindow", "Foreground Window" }
+                    }
+                }
 
                 // Output Format
                 div { class: "mb-6",
