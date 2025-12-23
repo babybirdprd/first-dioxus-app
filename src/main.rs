@@ -4,13 +4,14 @@ mod capture;
 mod components;
 mod config;
 mod hotkey;
+mod shared_state;
+mod tray;
 mod views;
 
-use capture::{is_recording, start_recording, stop_recording, RecorderConfig};
-use components::Hero;
+use capture::{start_recording, stop_recording, RecorderConfig};
 use config::Config;
 use hotkey::HotkeyManager;
-use views::{Blog, Home, Navbar};
+use views::{Blog, Home, Navbar, Settings};
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -20,6 +21,8 @@ enum Route {
         Home {},
         #[route("/blog/:id")]
         Blog { id: i32 },
+        #[route("/settings")]
+        Settings {},
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
@@ -38,14 +41,27 @@ fn main() {
         eprintln!("Failed to create output folder: {e}");
     }
 
-    // Initialize hotkey manager
-    let _hotkey_manager = match HotkeyManager::new() {
+    // Initialize hotkey manager and start listener
+    match HotkeyManager::new() {
         Ok(hm) => {
             println!("Hotkeys registered successfully");
-            Some(hm)
+            hotkey::start_hotkey_listener(hm.toggle_id());
+            // Keep the manager alive by leaking it (it needs to stay alive for hotkeys to work)
+            Box::leak(Box::new(hm));
         }
         Err(e) => {
             eprintln!("Failed to register hotkeys: {e}");
+        }
+    };
+
+    // Initialize system tray
+    let _tray = match tray::create_tray() {
+        Ok((tray_icon, menu_ids)) => {
+            println!("System tray initialized");
+            Some((tray_icon, menu_ids))
+        }
+        Err(e) => {
+            eprintln!("Failed to create tray icon: {e}");
             None
         }
     };
@@ -58,9 +74,40 @@ fn main() {
 fn App() -> Element {
     // Recording state
     let mut is_rec = use_signal(|| false);
-    let mut status_message = use_signal(|| "Ready to record (Ctrl+Shift+F9)".to_string());
+    let mut status_message = use_signal(|| "Ready (Ctrl+Shift+F9)".to_string());
 
-    // Toggle recording function
+    // Poll for hotkey toggle requests
+    use_future(move || async move {
+        loop {
+            // Check every 100ms for hotkey toggle
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+            if shared_state::take_hotkey_toggle() {
+                let currently_recording = is_rec();
+                if currently_recording {
+                    stop_recording();
+                    is_rec.set(false);
+                    status_message.set("Recording saved!".to_string());
+                    println!("Hotkey: Recording stopped");
+                } else {
+                    let config = RecorderConfig::default();
+                    match start_recording(config) {
+                        Ok(_) => {
+                            is_rec.set(true);
+                            status_message.set("Recording...".to_string());
+                            println!("Hotkey: Recording started");
+                        }
+                        Err(e) => {
+                            status_message.set(format!("Error: {}", e));
+                            eprintln!("Failed to start recording: {e}");
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // Toggle recording function (for button click)
     let toggle_recording = move |_| {
         let currently_recording = is_rec();
         if currently_recording {
@@ -114,6 +161,14 @@ fn App() -> Element {
                     onclick: toggle_recording,
                     if is_rec() { "Stop" } else { "Record" }
                 }
+            }
+        }
+
+        // Recording border indicator (red glowing border when recording)
+        if is_rec() {
+            div {
+                class: "fixed inset-0 pointer-events-none z-40 border-4 border-red-500 animate-pulse",
+                style: "box-shadow: inset 0 0 20px rgba(239, 68, 68, 0.5);"
             }
         }
 

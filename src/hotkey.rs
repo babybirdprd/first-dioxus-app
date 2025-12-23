@@ -2,9 +2,10 @@
 //!
 //! Default hotkey: Ctrl+Shift+F9
 
+use crate::shared_state;
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
-    GlobalHotKeyEvent, GlobalHotKeyManager,
+    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
 
 /// Manages global hotkeys for the application
@@ -32,8 +33,25 @@ impl HotkeyManager {
         })
     }
 
-    /// Check if the given event matches toggle recording
-    pub fn is_toggle_recording(&self, event: &GlobalHotKeyEvent) -> bool {
-        event.id == self.toggle_recording_id
+    /// Get the toggle recording hotkey ID
+    pub fn toggle_id(&self) -> u32 {
+        self.toggle_recording_id
     }
+}
+
+/// Start the hotkey listener in a background thread
+pub fn start_hotkey_listener(toggle_id: u32) {
+    std::thread::spawn(move || {
+        let receiver = GlobalHotKeyEvent::receiver();
+        println!("Hotkey listener started");
+
+        loop {
+            if let Ok(event) = receiver.recv() {
+                // Only trigger on key PRESS, not release
+                if event.id == toggle_id && event.state == HotKeyState::Pressed {
+                    shared_state::request_hotkey_toggle();
+                }
+            }
+        }
+    });
 }
