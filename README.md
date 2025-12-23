@@ -53,6 +53,16 @@ dx serve
 To run for a different platform, use the `--platform platform` flag. E.g.
 ```bash
 dx serve --platform desktop
+
+
 ```
 
 
+Phase 2 Complete! ✅
+
+All Phase 2 features done:
+
+✅ Settings UI at /settings with all options
+✅ Hotkey fixed - Ctrl+Shift+F9 only triggers on press (not release)
+✅ Recording indicator - red pulsing border when recording
+✅ Capture source - dropdown to choose Primary Monitor or Foreground Window
