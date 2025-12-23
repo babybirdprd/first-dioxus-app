@@ -11,7 +11,10 @@ use std::time::Instant;
 #[cfg(windows)]
 use windows_capture::{
     capture::{Context, GraphicsCaptureApiHandler},
-    encoder::{AudioSettingsBuilder, ContainerSettingsBuilder, VideoEncoder, VideoSettingsBuilder},
+    encoder::{
+        AudioSettingsBuilder, ContainerSettingsBuilder, VideoEncoder, VideoSettingsBuilder,
+        VideoSettingsSubType,
+    },
     frame::Frame,
     graphics_capture_api::InternalCaptureControl,
     monitor::Monitor,
@@ -82,7 +85,9 @@ pub mod windows_impl {
             }
 
             let encoder = VideoEncoder::new(
-                VideoSettingsBuilder::new(config.width, config.height),
+                VideoSettingsBuilder::new(config.width, config.height)
+                    .sub_type(VideoSettingsSubType::H264) // H.264 for WMP compatibility
+                    .frame_rate(config.fps),
                 AudioSettingsBuilder::default().disabled(true),
                 ContainerSettingsBuilder::default(),
                 &config.output_path,
