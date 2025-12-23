@@ -37,6 +37,15 @@ pub fn set_recording(state: bool) {
     IS_RECORDING.store(state, Ordering::SeqCst);
 }
 
+/// Zoom mode for recording
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum ZoomMode {
+    #[default]
+    None,
+    FollowCursor,
+    ClickToZoom,
+}
+
 /// Recorder configuration
 #[derive(Clone, Debug)]
 pub struct RecorderConfig {
@@ -44,6 +53,8 @@ pub struct RecorderConfig {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    pub zoom_mode: ZoomMode,
+    pub zoom_level: f32,
 }
 
 impl Default for RecorderConfig {
@@ -57,6 +68,8 @@ impl Default for RecorderConfig {
             width: 1920,
             height: 1080,
             fps: 30,
+            zoom_mode: ZoomMode::None,
+            zoom_level: 1.5,
         }
     }
 }

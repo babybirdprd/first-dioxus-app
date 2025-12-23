@@ -7,11 +7,13 @@ mod hotkey;
 mod shared_state;
 mod tray;
 mod views;
+mod zoom;
 
 use capture::{start_recording, stop_recording, RecorderConfig};
 use config::Config;
 use hotkey::HotkeyManager;
 use views::{Blog, Home, Navbar, Settings};
+use zoom::{start_event_logging, stop_event_logging, update_event_logging};
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -76,20 +78,32 @@ fn App() -> Element {
     let mut is_rec = use_signal(|| false);
     let mut status_message = use_signal(|| "Ready (Ctrl+Shift+F9)".to_string());
 
-    // Poll for hotkey toggle requests
+    // Poll for hotkey toggle requests and update event logging
     use_future(move || async move {
         loop {
-            // Check every 100ms for hotkey toggle
+            // Check every 100ms for hotkey toggle and update event logging
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+            // Update event logging if recording
+            if is_rec() {
+                update_event_logging();
+            }
 
             if shared_state::take_hotkey_toggle() {
                 let currently_recording = is_rec();
                 if currently_recording {
+                    // Stop recording and event logging
+                    let events = stop_event_logging();
                     stop_recording();
                     is_rec.set(false);
-                    status_message.set("Recording saved!".to_string());
-                    println!("Hotkey: Recording stopped");
+                    status_message.set(format!("Saved! {} events", events.len()));
+                    println!(
+                        "Hotkey: Recording stopped, {} events captured",
+                        events.len()
+                    );
                 } else {
+                    // Start recording and event logging
+                    start_event_logging();
                     let config = RecorderConfig::default();
                     match start_recording(config) {
                         Ok(_) => {
@@ -98,6 +112,7 @@ fn App() -> Element {
                             println!("Hotkey: Recording started");
                         }
                         Err(e) => {
+                            stop_event_logging(); // Clean up
                             status_message.set(format!("Error: {}", e));
                             eprintln!("Failed to start recording: {e}");
                         }
@@ -111,13 +126,15 @@ fn App() -> Element {
     let toggle_recording = move |_| {
         let currently_recording = is_rec();
         if currently_recording {
-            // Stop recording
+            // Stop recording and event logging
+            let events = stop_event_logging();
             stop_recording();
             is_rec.set(false);
-            status_message.set("Recording saved!".to_string());
-            println!("Recording stopped");
+            status_message.set(format!("Saved! {} events", events.len()));
+            println!("Recording stopped, {} events captured", events.len());
         } else {
-            // Start recording
+            // Start recording and event logging
+            start_event_logging();
             let config = RecorderConfig::default();
             match start_recording(config) {
                 Ok(_) => {
@@ -126,6 +143,7 @@ fn App() -> Element {
                     println!("Recording started");
                 }
                 Err(e) => {
+                    stop_event_logging(); // Clean up
                     status_message.set(format!("Error: {}", e));
                     eprintln!("Failed to start recording: {e}");
                 }
