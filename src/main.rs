@@ -1,67 +1,122 @@
-// The dioxus prelude contains a ton of common items used in dioxus apps. It's a good idea to import wherever you
-// need dioxus
 use dioxus::prelude::*;
 
-use components::Hero;
-use views::{Blog, Home, Navbar};
-
-/// Define a components module that contains all shared components for our app.
+mod capture;
 mod components;
-/// Define a views module that contains the UI for all Layouts and Routes for our app.
+mod config;
+mod hotkey;
 mod views;
 
-/// The Route enum is used to define the structure of internal routes in our app. All route enums need to derive
-/// the [`Routable`] trait, which provides the necessary methods for the router to work.
-/// 
-/// Each variant represents a different URL pattern that can be matched by the router. If that pattern is matched,
-/// the components for that route will be rendered.
+use capture::{is_recording, start_recording, stop_recording, RecorderConfig};
+use components::Hero;
+use config::Config;
+use hotkey::HotkeyManager;
+use views::{Blog, Home, Navbar};
+
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
 enum Route {
-    // The layout attribute defines a wrapper for all routes under the layout. Layouts are great for wrapping
-    // many routes with a common UI like a navbar.
     #[layout(Navbar)]
-        // The route attribute defines the URL pattern that a specific route matches. If that pattern matches the URL,
-        // the component for that route will be rendered. The component name that is rendered defaults to the variant name.
         #[route("/")]
         Home {},
-        // The route attribute can include dynamic parameters that implement [`std::str::FromStr`] and [`std::fmt::Display`] with the `:` syntax.
-        // In this case, id will match any integer like `/blog/123` or `/blog/-456`.
         #[route("/blog/:id")]
-        // Fields of the route variant will be passed to the component as props. In this case, the blog component must accept
-        // an `id` prop of type `i32`.
         Blog { id: i32 },
 }
 
-// We can import assets in dioxus with the `asset!` macro. This macro takes a path to an asset relative to the crate root.
-// The macro returns an `Asset` type that will display as the path to the asset in the browser or a local path in desktop bundles.
 const FAVICON: Asset = asset!("/assets/favicon.ico");
-// The asset macro also minifies some assets like CSS and JS to make bundled smaller
 const MAIN_CSS: Asset = asset!("/assets/styling/main.css");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
 fn main() {
-    // The `launch` function is the main entry point for a dioxus app. It takes a component and renders it with the platform feature
-    // you have enabled
+    // Initialize config
+    let config = Config::load();
+    println!("DemoRecorder starting...");
+    println!("Output folder: {:?}", config.output_folder);
+    println!("Hotkey: {}", config.hotkey);
+
+    // Create output directory if needed
+    if let Err(e) = std::fs::create_dir_all(&config.output_folder) {
+        eprintln!("Failed to create output folder: {e}");
+    }
+
+    // Initialize hotkey manager
+    let _hotkey_manager = match HotkeyManager::new() {
+        Ok(hm) => {
+            println!("Hotkeys registered successfully");
+            Some(hm)
+        }
+        Err(e) => {
+            eprintln!("Failed to register hotkeys: {e}");
+            None
+        }
+    };
+
+    // Launch Dioxus app
     dioxus::launch(App);
 }
 
-/// App is the main component of our app. Components are the building blocks of dioxus apps. Each component is a function
-/// that takes some props and returns an Element. In this case, App takes no props because it is the root of our app.
-///
-/// Components should be annotated with `#[component]` to support props, better error messages, and autocomplete
 #[component]
 fn App() -> Element {
-    // The `rsx!` macro lets us define HTML inside of rust. It expands to an Element with all of our HTML inside.
+    // Recording state
+    let mut is_rec = use_signal(|| false);
+    let mut status_message = use_signal(|| "Ready to record (Ctrl+Shift+F9)".to_string());
+
+    // Toggle recording function
+    let toggle_recording = move |_| {
+        let currently_recording = is_rec();
+        if currently_recording {
+            // Stop recording
+            stop_recording();
+            is_rec.set(false);
+            status_message.set("Recording saved!".to_string());
+            println!("Recording stopped");
+        } else {
+            // Start recording
+            let config = RecorderConfig::default();
+            match start_recording(config) {
+                Ok(_) => {
+                    is_rec.set(true);
+                    status_message.set("Recording...".to_string());
+                    println!("Recording started");
+                }
+                Err(e) => {
+                    status_message.set(format!("Error: {}", e));
+                    eprintln!("Failed to start recording: {e}");
+                }
+            }
+        }
+    };
+
     rsx! {
-        // In addition to element and text (which we will see later), rsx can contain other components. In this case,
-        // we are using the `document::Link` component to add a link to our favicon and main CSS file into the head of our app.
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
         document::Link { rel: "stylesheet", href: TAILWIND_CSS }
 
-        // The router component renders the route enum we defined above. It will handle synchronization of the URL and render
-        // the layouts and components for the active route.
+        // Recording controls overlay
+        div { class: "fixed top-4 right-4 z-50 bg-gray-900/90 rounded-lg p-4 shadow-xl border border-gray-700",
+            div { class: "flex items-center gap-4",
+                // Recording indicator
+                if is_rec() {
+                    div { class: "w-3 h-3 bg-red-500 rounded-full animate-pulse" }
+                } else {
+                    div { class: "w-3 h-3 bg-gray-500 rounded-full" }
+                }
+
+                // Status text
+                span { class: "text-white text-sm", "{status_message}" }
+
+                // Toggle button
+                button {
+                    class: if is_rec() {
+                        "px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition"
+                    } else {
+                        "px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition"
+                    },
+                    onclick: toggle_recording,
+                    if is_rec() { "Stop" } else { "Record" }
+                }
+            }
+        }
+
         Router::<Route> {}
     }
 }
