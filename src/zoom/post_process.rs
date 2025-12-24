@@ -447,16 +447,19 @@ pub fn apply_zoom_effects(
         current_cx = state.cx;
         current_cy = state.cy;
 
-        // OPTIMIZATION: If no zoom needed AND we wasn't zooming before, pass through original frame directly
-        if (current_zoom - 1.0).abs() < 0.001 && (prev_zoom - 1.0).abs() < 0.001 {
-            if let Err(e) = encoder.encode(&frame, time) {
-                println!("Error encoding passthrough frame {}: {}", processed, e);
-            }
+        // Dimension check for robustness
+        let f_height = frame.shape()[0];
+        let f_width = frame.shape()[1];
+        if f_height != height as usize || f_width != width as usize {
+            tracing::error!(
+                "CRITICAL: Frame {} dimensions mismatch! Got {}x{}, expected {}x{}. Skipping.",
+                processed,
+                f_width,
+                f_height,
+                width,
+                height
+            );
             processed += 1;
-            if processed % 100 == 0 {
-                print!("\rProcessed {} frames (passthrough)...", processed);
-                std::io::Write::flush(&mut std::io::stdout())?;
-            }
             continue;
         }
 
@@ -503,11 +506,14 @@ pub fn apply_zoom_effects(
 
         // 5. Encode frame
         if let Err(e) = encoder.encode(&zoomed_frame, time) {
-            println!("Error encoding frame {}: {}", processed, e);
+            tracing::error!("Error encoding frame {}: {}", processed, e);
         }
 
         // 6. Reclaim the buffer from ndarray to avoid allocation in the next frame
         processed_rgb = zoomed_frame.into_raw_vec_and_offset().0;
+
+        // 7. Explicitly drop heavy object (zoomed_frame is already consumed by into_raw_vec_and_offset)
+        drop(frame);
 
         processed += 1;
         if processed % 30 == 0 {
