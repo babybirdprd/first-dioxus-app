@@ -26,21 +26,36 @@ pub struct TelemetrySession {
     pub frames: Vec<TelemetryFrame>,
 }
 
-/// Initialize tracing with both console and file output
-pub fn init_diagnostics() -> WorkerGuard {
-    let log_dir = dirs::video_dir()
+/// Get the central log directory
+pub fn get_log_dir() -> std::path::PathBuf {
+    dirs::video_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default())
         .join("DemoRecorder")
-        .join("logs");
+        .join("logs")
+}
+
+/// Initialize tracing with both console and file output
+pub fn init_diagnostics() -> WorkerGuard {
+    let log_dir = get_log_dir();
 
     if !log_dir.exists() {
         let _ = std::fs::create_dir_all(&log_dir);
     }
 
-    tracing::info!("Diagnostics initialized. Logs: {:?}", log_dir);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let log_filename = format!("session_{}.log", timestamp);
+
+    tracing::info!(
+        "Diagnostics initialized. Logs: {:?}/{}",
+        log_dir,
+        log_filename
+    );
 
     // file_appender takes ownership of log_dir, so we do it after the info! call
-    let file_appender = tracing_appender::rolling::never(log_dir, "zoom_diagnosis.log");
+    let file_appender = tracing_appender::rolling::never(log_dir, log_filename);
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
     tracing_subscriber::registry()

@@ -117,35 +117,78 @@ fn merge_overlapping_keyframes(keyframes: &mut Vec<ZoomKeyframe>) {
     }
 }
 
-/// Finds the nearest cursor position at a given time from the event log
+/// Finds the nearest cursor position at a given time from the event log with linear interpolation
 fn get_cursor_pos_at(time_secs: f32, log: &EventLog) -> (f32, f32) {
-    let mut nearest_pos = (0.5, 0.5);
-    let mut min_diff = f32::MAX;
+    if log.events.is_empty() {
+        return (0.5, 0.5);
+    }
 
     let screen_width = log.metadata.width as f32;
     let screen_height = log.metadata.height as f32;
 
+    // Find bounding events for interpolation
+    let mut prev_event = None;
+    let mut next_event = None;
+
     for event in &log.events {
-        let (x, y, timestamp_ms) = match event {
-            RecordedEvent::Click { x, y, timestamp_ms } => (*x, *y, *timestamp_ms),
-            RecordedEvent::CursorMove { x, y, timestamp_ms } => (*x, *y, *timestamp_ms),
+        let timestamp_ms = match event {
+            RecordedEvent::Click { timestamp_ms, .. } => *timestamp_ms,
+            RecordedEvent::CursorMove { timestamp_ms, .. } => *timestamp_ms,
         };
-
         let event_time = timestamp_ms as f32 / 1000.0;
-        let diff = (time_secs - event_time).abs();
 
-        if diff < min_diff {
-            min_diff = diff;
-            nearest_pos = (x as f32 / screen_width, y as f32 / screen_height);
-        }
-
-        // Cursors are sorted by time, so we can stop early if we pass the target time
-        if event_time > time_secs + 0.5 {
+        if event_time <= time_secs {
+            prev_event = Some(event);
+        } else {
+            next_event = Some(event);
             break;
         }
     }
 
-    nearest_pos
+    match (prev_event, next_event) {
+        (Some(p), Some(n)) => {
+            let (px, py, pt) = match p {
+                RecordedEvent::Click { x, y, timestamp_ms } => {
+                    (*x, *y, *timestamp_ms as f32 / 1000.0)
+                }
+                RecordedEvent::CursorMove { x, y, timestamp_ms } => {
+                    (*x, *y, *timestamp_ms as f32 / 1000.0)
+                }
+            };
+            let (nx, ny, nt) = match n {
+                RecordedEvent::Click { x, y, timestamp_ms } => {
+                    (*x, *y, *timestamp_ms as f32 / 1000.0)
+                }
+                RecordedEvent::CursorMove { x, y, timestamp_ms } => {
+                    (*x, *y, *timestamp_ms as f32 / 1000.0)
+                }
+            };
+
+            if nt > pt {
+                let t = (time_secs - pt) / (nt - pt);
+                let x = px as f32 + (nx as f32 - px as f32) * t;
+                let y = py as f32 + (ny as f32 - py as f32) * t;
+                (x / screen_width, y / screen_height)
+            } else {
+                (px as f32 / screen_width, py as f32 / screen_height)
+            }
+        }
+        (Some(p), None) => {
+            let (x, y) = match p {
+                RecordedEvent::Click { x, y, .. } => (*x, *y),
+                RecordedEvent::CursorMove { x, y, .. } => (*x, *y),
+            };
+            (x as f32 / screen_width, y as f32 / screen_height)
+        }
+        (None, Some(n)) => {
+            let (x, y) = match n {
+                RecordedEvent::Click { x, y, .. } => (*x, *y),
+                RecordedEvent::CursorMove { x, y, .. } => (*x, *y),
+            };
+            (x as f32 / screen_width, y as f32 / screen_height)
+        }
+        (None, None) => (0.5, 0.5),
+    }
 }
 
 /// Detailed camera state for telemetry
@@ -218,11 +261,13 @@ fn calculate_camera_at_time(
 
         // "Cursor Follow" - Magnetic drift towards the live cursor during the hold phase
         if time_secs > zoom_in_end && time_secs < hold_end {
-            // Apply a 30% magnetic pull towards the cursor
-            // This makes the camera feel "alive" and follow the action
-            let follow_intensity = 0.35;
-            cx = cx + (mouse_cx - cx) * follow_intensity;
-            cy = cy + (mouse_cy - cy) * follow_intensity;
+            // Apply a softer, progressive magnetic pull towards the cursor
+            // We use a time-based blend to avoid the frame-1 jump
+            let hold_t = (time_secs - zoom_in_end) / (hold_end - zoom_in_end);
+            let follow_weight = (hold_t * 5.0).min(1.0) * 0.35; // Fade in the follow effect over 200ms
+
+            cx = cx + (mouse_cx - cx) * follow_weight;
+            cy = cy + (mouse_cy - cy) * follow_weight;
         }
 
         tracing::debug!(
@@ -268,12 +313,21 @@ fn ease_in_out(t: f32) -> f32 {
 
 // apply_zoom_to_frame removed in favor of RenderEngine
 
-/// Apply post-processing using video-rs
 #[tracing::instrument(skip(log, config))]
 pub fn apply_zoom_effects(
     log: &EventLog,
     config: &PostProcessConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let log_dir = crate::zoom::diagnostics::get_log_dir();
+    let file_stem = Path::new(&config.output_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown");
+    let audit_log_path = log_dir.join(format!("{}.log", file_stem));
+    let mut audit_log = std::fs::File::create(&audit_log_path)?;
+    use std::io::Write;
+
+    writeln!(audit_log, "[START] Zooming: {}", config.input_path)?;
     tracing::info!("Applying zoom effects to: {}", config.input_path);
     use video_rs::decode::Decoder;
     use video_rs::encode::{Encoder, Settings};
@@ -300,6 +354,12 @@ pub fn apply_zoom_effects(
 
     // NOW generate keyframes with actual dimensions
     let keyframes = generate_keyframes(log, &actual_config);
+    writeln!(
+        audit_log,
+        "[KEYFRAMES] Generated {} keyframes from {} events",
+        keyframes.len(),
+        log.events.len()
+    )?;
     println!(
         "Generated {} keyframes from {} events",
         keyframes.len(),
@@ -323,6 +383,11 @@ pub fn apply_zoom_effects(
 
     // Initialize GPU Render Engine
     let mut render_engine = pollster::block_on(RenderEngine::new(width as u32, height as u32))?;
+    writeln!(
+        audit_log,
+        "[GPU] RenderEngine initialized for {}x{}",
+        width, height
+    )?;
 
     let mut current_zoom = 1.0;
     let mut current_cx = 0.5;
@@ -441,9 +506,14 @@ pub fn apply_zoom_effects(
 
     tracing::info!("Post-processing complete. Processed {} frames.", processed);
 
-    // Save telemetry
-    let telemetry_path = std::path::Path::new(&config.output_path).with_extension("telemetry.json");
+    // Save telemetry to logs folder
+    let telemetry_path = log_dir.join(format!("{}.telemetry.json", file_stem));
     let _ = crate::zoom::diagnostics::save_telemetry(&telemetry, &telemetry_path);
+    writeln!(
+        audit_log,
+        "[COMPLETE] Telemetry saved to: {:?}",
+        telemetry_path
+    )?;
 
     Ok(())
 }

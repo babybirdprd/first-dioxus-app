@@ -84,8 +84,8 @@ fn App() -> Element {
     // Poll for hotkey toggle requests and update event logging
     use_future(move || async move {
         loop {
-            // Check every 100ms for hotkey toggle and update event logging
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            // Check every 10ms for hotkey toggle and update event logging for smoothness
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
             // Update event logging if recording
             if is_rec() {

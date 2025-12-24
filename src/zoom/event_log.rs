@@ -78,8 +78,8 @@ pub fn update_event_logging() {
                 .push(RecordedEvent::Click { x, y, timestamp_ms });
         }
 
-        // Sample cursor position every 100ms
-        if state.last_sample_time.elapsed() >= Duration::from_millis(100) {
+        // Sample cursor position every 16ms (60Hz) for smoother 4K tracking
+        if state.last_sample_time.elapsed() >= Duration::from_millis(16) {
             state
                 .events
                 .push(RecordedEvent::CursorMove { x, y, timestamp_ms });
