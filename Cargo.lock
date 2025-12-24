@@ -921,6 +921,7 @@ dependencies = [
  "device_query",
  "dioxus",
  "dirs 5.0.1",
+ "futures-util",
  "global-hotkey 0.6.4",
  "image",
  "ndarray",

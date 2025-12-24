@@ -1,7 +1,15 @@
 //! Dashboard view - main recordings library and controls
 
 use dioxus::prelude::*;
+use futures_util::StreamExt;
 use std::path::PathBuf;
+
+/// Request to process zoom effects in background
+struct ZoomRequest {
+    events: Vec<crate::zoom::RecordedEvent>,
+    config: crate::zoom::PostProcessConfig,
+    output_name: String,
+}
 
 /// Recording entry in the library
 #[derive(Clone, Debug, PartialEq)]
@@ -177,6 +185,38 @@ fn RecordingCard(entry: RecordingEntry) -> Element {
     let mut processing = use_signal(|| false);
     let mut status_msg = use_signal(|| String::new());
 
+    // Coroutine for background zoom processing
+    // This is the proper Dioxus pattern for interactive background tasks
+    let zoom_worker = use_coroutine(
+        move |mut rx: dioxus::prelude::UnboundedReceiver<ZoomRequest>| async move {
+            while let Some(request) = rx.next().await {
+                processing.set(true);
+                status_msg.set(format!("Processing {} events...", request.events.len()));
+
+                // Run the heavy work in spawn_blocking
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::zoom::apply_zoom_effects(&request.events, &request.config)
+                        .map_err(|e| e.to_string())
+                })
+                .await;
+
+                // Update UI with result
+                match result {
+                    Ok(Ok(_)) => {
+                        status_msg.set(format!("✓ Saved to {}", request.output_name));
+                    }
+                    Ok(Err(err)) => {
+                        status_msg.set(format!("Error: {}", err));
+                    }
+                    Err(err) => {
+                        status_msg.set(format!("Task error: {}", err));
+                    }
+                }
+                processing.set(false);
+            }
+        },
+    );
+
     // Open file in default player
     let open_file = {
         let path = entry.path.clone();
@@ -190,7 +230,7 @@ fn RecordingCard(entry: RecordingEntry) -> Element {
         }
     };
 
-    // Apply zoom effects
+    // Apply zoom effects - sends request to coroutine
     let apply_zoom = {
         let entry = entry.clone();
         move |_| {
@@ -202,7 +242,6 @@ fn RecordingCard(entry: RecordingEntry) -> Element {
                 }
             };
 
-            processing.set(true);
             status_msg.set("Loading events...".to_string());
 
             // Load events from JSON file
@@ -210,14 +249,12 @@ fn RecordingCard(entry: RecordingEntry) -> Element {
                 Ok(e) => e,
                 Err(err) => {
                     status_msg.set(format!("Failed to load events: {}", err));
-                    processing.set(false);
                     return;
                 }
             };
 
             if events.is_empty() {
                 status_msg.set("No events to process".to_string());
-                processing.set(false);
                 return;
             }
 
@@ -227,10 +264,13 @@ fn RecordingCard(entry: RecordingEntry) -> Element {
                 "{}_zoomed.mp4",
                 input_path.file_stem().unwrap_or_default().to_string_lossy()
             ));
+            let output_name = output_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
 
-            status_msg.set(format!("Processing {} events...", events.len()));
-
-            // Create config and run ffmpeg
+            // Create config
             let config = crate::zoom::PostProcessConfig {
                 input_path: input_path.to_string_lossy().to_string(),
                 output_path: output_path.to_string_lossy().to_string(),
@@ -242,21 +282,12 @@ fn RecordingCard(entry: RecordingEntry) -> Element {
                 hold_duration: 2.0,
             };
 
-            match crate::zoom::apply_zoom_effects(&events, &config) {
-                Ok(_) => {
-                    status_msg.set(format!(
-                        "✓ Saved to {}",
-                        output_path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                    ));
-                }
-                Err(err) => {
-                    status_msg.set(format!("FFmpeg error: {}", err));
-                }
-            }
-            processing.set(false);
+            // Send work to the coroutine (non-blocking!)
+            zoom_worker.send(ZoomRequest {
+                events,
+                config,
+                output_name,
+            });
         }
     };
 

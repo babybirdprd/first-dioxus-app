@@ -17,6 +17,7 @@ ndarray = "0.16"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "5"
+futures-util = "0.3"
 
 # Screen capture - platform specific
 [target.'cfg(windows)'.dependencies]

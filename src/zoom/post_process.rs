@@ -226,13 +226,25 @@ pub fn apply_zoom_effects(
     let settings = Settings::preset_h264_yuv420p(width as usize, height as usize, false);
     let mut encoder = Encoder::new(destination, settings)?;
 
-    let _frame_duration = Time::from_secs(1.0 / frame_rate);
-    let mut frame_idx: usize = 0;
     let mut processed = 0;
+
+    println!("Starting frame processing...");
 
     // Process each frame
     for frame_result in decoder.decode_iter() {
-        let (time, frame) = frame_result?;
+        let (time, frame) = match frame_result {
+            Ok(f) => f,
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("exhausted") {
+                    // End of video stream - this is normal, break the loop
+                    println!("End of video stream at frame {}", processed);
+                    break;
+                }
+                println!("Error decoding frame {}: {}", processed, e);
+                continue; // Skip bad frames
+            }
+        };
         let time_secs = time.as_secs() as f32;
 
         // Calculate zoom at this time
@@ -240,26 +252,46 @@ pub fn apply_zoom_effects(
 
         // Convert frame to image - video-rs frame is ndarray
         // Get the raw data from the ndarray frame
-        let frame_slice = frame.as_slice().ok_or("Frame not contiguous")?;
+        let frame_slice = match frame.as_slice() {
+            Some(s) => s,
+            None => {
+                println!("Frame {} not contiguous, skipping", processed);
+                continue;
+            }
+        };
 
         // video-rs gives us RGB data, convert to image
         let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
-            ImageBuffer::from_raw(width as u32, height as u32, frame_slice.to_vec())
-                .ok_or("Failed to create image buffer")?;
+            match ImageBuffer::from_raw(width as u32, height as u32, frame_slice.to_vec()) {
+                Some(i) => i,
+                None => {
+                    println!("Failed to create image buffer for frame {}", processed);
+                    continue;
+                }
+            };
 
         // Apply zoom
         let zoomed = apply_zoom_to_frame(&img, zoom, cx, cy);
 
         // Convert back to ndarray for encoding
         let zoomed_data: Vec<u8> = zoomed.into_raw();
-        let zoomed_frame =
-            video_rs::Frame::from_shape_vec((height as usize, width as usize, 3), zoomed_data)?;
+        let zoomed_frame = match video_rs::Frame::from_shape_vec(
+            (height as usize, width as usize, 3),
+            zoomed_data,
+        ) {
+            Ok(f) => f,
+            Err(e) => {
+                println!("Failed to create frame {}: {}", processed, e);
+                continue;
+            }
+        };
 
-        // Encode frame
-        let position = Time::from_nth_of_a_second(frame_idx);
-        encoder.encode(&zoomed_frame, position)?;
+        // Encode frame with ORIGINAL source timestamp (key for correct timing!)
+        if let Err(e) = encoder.encode(&zoomed_frame, time) {
+            println!("Error encoding frame {}: {}", processed, e);
+            // Continue anyway, don't fail the whole video
+        }
 
-        frame_idx += 1;
         processed += 1;
 
         // Progress every 30 frames
