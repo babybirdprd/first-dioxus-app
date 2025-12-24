@@ -1,6 +1,6 @@
 //! Settings view component
 
-use crate::config::{AudioMode, CaptureTarget, Config, OutputFormat, ZoomMode};
+use crate::config::{AudioMode, CaptureTarget, Config, OutputFormat};
 use dioxus::prelude::*;
 
 /// Settings page component

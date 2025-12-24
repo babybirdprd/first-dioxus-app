@@ -37,8 +37,21 @@ fn scan_recordings() -> Vec<RecordingEntry> {
                 let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
 
                 // Check for matching events file
-                let events_path = path.with_extension("events.json");
-                let events_exists = events_path.exists();
+                // Try both patterns: .events.json (replacing .mp4) and .mp4.events.json
+                let events_path_a = path.with_extension("events.json");
+                let events_path_b = PathBuf::from(format!("{}.events.json", path.display()));
+
+                let (events_path, events_exists) = if events_path_a.exists() {
+                    (events_path_a, true)
+                } else if events_path_b.exists() {
+                    (events_path_b, true)
+                } else {
+                    println!(
+                        "No events file found. Checked: {:?} and {:?}",
+                        events_path_a, events_path_b
+                    );
+                    (events_path_a, false)
+                };
 
                 // Count events if file exists
                 let event_count = if events_exists {
@@ -104,26 +117,30 @@ pub fn Dashboard() -> Element {
 
     rsx! {
         div { class: "min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white",
-            div { class: "max-w-4xl mx-auto p-8",
-                // Header
-                div { class: "flex items-center justify-between mb-8",
-                    h1 { class: "text-3xl font-bold", "🎬 DemoRecorder" }
-                    div { class: "text-sm text-gray-400",
-                        "Press Ctrl+Shift+F9 to record"
+            div { class: "max-w-4xl mx-auto p-8 pt-6",
+                // Header - cleaner, no duplicate hotkey tip
+                div { class: "mb-8",
+                    h1 { class: "text-2xl font-bold flex items-center gap-3",
+                        span { class: "text-3xl", "🎬" }
+                        span { "DemoRecorder" }
                     }
                 }
 
-                // Recordings folder info
-                div { class: "mb-6 p-4 bg-gray-800/50 rounded-lg border border-gray-700",
+                // Recordings folder info - more subtle
+                div { class: "mb-6 p-4 bg-gray-800/30 rounded-xl border border-gray-700/50",
                     div { class: "flex items-center justify-between",
-                        div {
-                            div { class: "text-sm text-gray-400", "📁 Recordings Folder" }
-                            div { class: "text-sm font-mono truncate", "{dir.display()}" }
+                        div { class: "flex items-center gap-3 min-w-0",
+                            span { class: "text-xl", "📁" }
+                            div { class: "min-w-0",
+                                div { class: "text-xs text-gray-500 uppercase tracking-wide", "Recordings Folder" }
+                                div { class: "text-sm font-mono text-gray-300 truncate", "{dir.display()}" }
+                            }
                         }
                         button {
-                            class: "px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition",
+                            class: "px-3 py-1.5 bg-gray-700/50 hover:bg-gray-600 rounded-lg text-sm transition flex items-center gap-2",
                             onclick: refresh,
-                            "🔄 Refresh"
+                            span { "🔄" }
+                            span { "Refresh" }
                         }
                     }
                 }
@@ -177,16 +194,68 @@ fn RecordingCard(entry: RecordingEntry) -> Element {
     let apply_zoom = {
         let entry = entry.clone();
         move |_| {
-            if entry.events_path.is_none() {
-                status_msg.set("No events file found".to_string());
+            let events_path = match &entry.events_path {
+                Some(p) => p.clone(),
+                None => {
+                    status_msg.set("No events file found".to_string());
+                    return;
+                }
+            };
+
+            processing.set(true);
+            status_msg.set("Loading events...".to_string());
+
+            // Load events from JSON file
+            let events = match crate::zoom::load_events(&events_path) {
+                Ok(e) => e,
+                Err(err) => {
+                    status_msg.set(format!("Failed to load events: {}", err));
+                    processing.set(false);
+                    return;
+                }
+            };
+
+            if events.is_empty() {
+                status_msg.set("No events to process".to_string());
+                processing.set(false);
                 return;
             }
-            processing.set(true);
-            status_msg.set("Processing...".to_string());
 
-            // TODO: Actually run ffmpeg post-processing
-            // For now just show it's possible
-            status_msg.set("Zoom processing not yet implemented".to_string());
+            // Create output path
+            let input_path = entry.path.clone();
+            let output_path = input_path.with_file_name(format!(
+                "{}_zoomed.mp4",
+                input_path.file_stem().unwrap_or_default().to_string_lossy()
+            ));
+
+            status_msg.set(format!("Processing {} events...", events.len()));
+
+            // Create config and run ffmpeg
+            let config = crate::zoom::PostProcessConfig {
+                input_path: input_path.to_string_lossy().to_string(),
+                output_path: output_path.to_string_lossy().to_string(),
+                width: 1920,
+                height: 1080,
+                fps: 30,
+                zoom_level: 1.5,
+                zoom_duration: 0.3,
+                hold_duration: 2.0,
+            };
+
+            match crate::zoom::apply_zoom_effects(&events, &config) {
+                Ok(_) => {
+                    status_msg.set(format!(
+                        "✓ Saved to {}",
+                        output_path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    ));
+                }
+                Err(err) => {
+                    status_msg.set(format!("FFmpeg error: {}", err));
+                }
+            }
             processing.set(false);
         }
     };
@@ -204,15 +273,22 @@ fn RecordingCard(entry: RecordingEntry) -> Element {
     };
 
     rsx! {
-        div { class: "p-4 bg-gray-800/70 rounded-lg border border-gray-700 hover:border-gray-600 transition",
+        div {
+            class: "p-4 bg-gray-800/40 rounded-xl border border-gray-700/50 hover:border-gray-600/70 hover:bg-gray-800/60 transition-all",
             div { class: "flex items-center justify-between",
                 // File info
-                div { class: "flex-1 min-w-0",
-                    div { class: "font-medium truncate", "📹 {entry.filename}" }
-                    div { class: "text-sm text-gray-400 flex items-center gap-3",
-                        span { "{format_size(entry.size_bytes)}" }
-                        if let Some(count) = entry.event_count {
-                            span { class: "text-blue-400", "🎯 {count} events" }
+                div { class: "flex items-center gap-3 flex-1 min-w-0",
+                    // Video icon
+                    div { class: "text-2xl", "🎬" }
+                    div { class: "min-w-0",
+                        div { class: "font-medium truncate text-gray-100", "{entry.filename}" }
+                        div { class: "text-xs text-gray-500 flex items-center gap-2 mt-0.5",
+                            span { "{format_size(entry.size_bytes)}" }
+                            if let Some(count) = entry.event_count {
+                                span { class: "text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded", "🎯 {count} events" }
+                            } else {
+                                span { class: "text-gray-600", "No events" }
+                            }
                         }
                     }
                 }
@@ -220,20 +296,24 @@ fn RecordingCard(entry: RecordingEntry) -> Element {
                 // Actions
                 div { class: "flex items-center gap-2 ml-4",
                     button {
-                        class: "px-3 py-1.5 bg-blue-600 hover:bg-blue-700 rounded text-sm transition",
+                        class: "px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-all shadow-lg shadow-blue-600/20",
                         onclick: open_file,
                         "▶ Play"
                     }
                     if entry.events_path.is_some() {
                         button {
-                            class: "px-3 py-1.5 bg-purple-600 hover:bg-purple-700 rounded text-sm transition",
+                            class: if processing() {
+                                "px-3 py-1.5 bg-purple-800 rounded-lg text-sm font-medium cursor-wait opacity-70"
+                            } else {
+                                "px-3 py-1.5 bg-purple-600 hover:bg-purple-500 rounded-lg text-sm font-medium transition-all shadow-lg shadow-purple-600/20"
+                            },
                             disabled: processing(),
                             onclick: apply_zoom,
-                            "🔍 Zoom"
+                            if processing() { "Processing..." } else { "🔍 Zoom" }
                         }
                     }
                     button {
-                        class: "px-3 py-1.5 bg-red-600/50 hover:bg-red-600 rounded text-sm transition",
+                        class: "px-2.5 py-1.5 bg-gray-700/50 hover:bg-red-600 rounded-lg text-sm transition-all",
                         onclick: delete_recording,
                         "🗑️"
                     }
@@ -242,7 +322,7 @@ fn RecordingCard(entry: RecordingEntry) -> Element {
 
             // Status message
             if !status_msg().is_empty() {
-                div { class: "mt-2 text-sm text-yellow-400", "{status_msg}" }
+                div { class: "mt-3 text-sm text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-lg", "{status_msg}" }
             }
         }
     }

@@ -5,7 +5,6 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(windows)]
@@ -37,40 +36,47 @@ pub fn set_recording(state: bool) {
     IS_RECORDING.store(state, Ordering::SeqCst);
 }
 
-/// Zoom mode for recording
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub enum ZoomMode {
-    #[default]
-    None,
-    FollowCursor,
-    ClickToZoom,
-}
-
 /// Recorder configuration
 #[derive(Clone, Debug)]
 pub struct RecorderConfig {
     pub output_path: PathBuf,
+    pub events_path: PathBuf,
     pub width: u32,
     pub height: u32,
     pub fps: u32,
-    pub zoom_mode: ZoomMode,
-    pub zoom_level: f32,
 }
 
-impl Default for RecorderConfig {
-    fn default() -> Self {
+impl RecorderConfig {
+    /// Create a new config with timestamped filenames
+    pub fn with_timestamp() -> Self {
         let output_dir = dirs::video_dir()
             .unwrap_or_else(|| dirs::home_dir().unwrap_or_default())
             .join("DemoRecorder");
 
+        // Generate timestamp for filename
+        let now = std::time::SystemTime::now();
+        let timestamp = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // Format: recording_YYYYMMDD_HHMMSS
+        let filename = format!("recording_{}.mp4", timestamp);
+        let events_filename = format!("recording_{}.events.json", timestamp);
+
         Self {
-            output_path: output_dir.join("recording.mp4"),
+            output_path: output_dir.join(&filename),
+            events_path: output_dir.join(&events_filename),
             width: 1920,
             height: 1080,
             fps: 30,
-            zoom_mode: ZoomMode::None,
-            zoom_level: 1.5,
         }
+    }
+}
+
+impl Default for RecorderConfig {
+    fn default() -> Self {
+        Self::with_timestamp()
     }
 }
 

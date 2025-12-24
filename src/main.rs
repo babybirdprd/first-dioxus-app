@@ -74,7 +74,9 @@ fn main() {
 fn App() -> Element {
     // Recording state
     let mut is_rec = use_signal(|| false);
-    let mut status_message = use_signal(|| "Ready (Ctrl+Shift+F9)".to_string());
+    let mut status_message = use_signal(|| "Ready".to_string());
+    let mut current_events_path = use_signal(|| None::<std::path::PathBuf>);
+    let mut saved_at = use_signal(|| None::<std::time::Instant>);
 
     // Poll for hotkey toggle requests and update event logging
     use_future(move || async move {
@@ -87,22 +89,45 @@ fn App() -> Element {
                 update_event_logging();
             }
 
+            // Auto-reset status message after 3 seconds
+            let should_reset = match *saved_at.read() {
+                Some(t) => t.elapsed() >= std::time::Duration::from_secs(3),
+                None => false,
+            };
+            if should_reset {
+                status_message.set("Ready".to_string());
+                saved_at.set(None);
+            }
+
             if shared_state::take_hotkey_toggle() {
                 let currently_recording = is_rec();
                 if currently_recording {
-                    // Stop recording and event logging
+                    // Stop recording and save events
                     let events = stop_event_logging();
                     stop_recording();
                     is_rec.set(false);
-                    status_message.set(format!("Saved! {} events", events.len()));
-                    println!(
-                        "Hotkey: Recording stopped, {} events captured",
-                        events.len()
-                    );
+
+                    // Save events to file
+                    if let Some(ref path) = *current_events_path.read() {
+                        if let Err(e) = zoom::save_events(&events, path) {
+                            eprintln!("Failed to save events: {e}");
+                        } else {
+                            println!("Events saved to: {:?}", path);
+                        }
+                    }
+
+                    let event_count = events.len();
+                    status_message.set(format!("✓ Saved {} events", event_count));
+                    println!("Hotkey: Recording stopped, {} events captured", event_count);
+
+                    // Set a timestamp for auto-reset (handled in the polling loop)
+                    saved_at.set(Some(std::time::Instant::now()));
                 } else {
                     // Start recording and event logging
                     start_event_logging();
                     let config = RecorderConfig::default();
+                    current_events_path.set(Some(config.events_path.clone()));
+
                     match start_recording(config) {
                         Ok(_) => {
                             is_rec.set(true);
@@ -111,6 +136,7 @@ fn App() -> Element {
                         }
                         Err(e) => {
                             stop_event_logging(); // Clean up
+                            current_events_path.set(None);
                             status_message.set(format!("Error: {}", e));
                             eprintln!("Failed to start recording: {e}");
                         }
@@ -128,12 +154,26 @@ fn App() -> Element {
             let events = stop_event_logging();
             stop_recording();
             is_rec.set(false);
-            status_message.set(format!("Saved! {} events", events.len()));
-            println!("Recording stopped, {} events captured", events.len());
+
+            // Save events to file (same as hotkey handler)
+            if let Some(ref path) = *current_events_path.read() {
+                if let Err(e) = zoom::save_events(&events, path) {
+                    eprintln!("Failed to save events: {e}");
+                } else {
+                    println!("Events saved to: {:?}", path);
+                }
+            }
+
+            let event_count = events.len();
+            status_message.set(format!("✓ Saved {} events", event_count));
+            println!("Recording stopped, {} events captured", event_count);
+            saved_at.set(Some(std::time::Instant::now()));
         } else {
             // Start recording and event logging
             start_event_logging();
             let config = RecorderConfig::default();
+            current_events_path.set(Some(config.events_path.clone()));
+
             match start_recording(config) {
                 Ok(_) => {
                     is_rec.set(true);
@@ -142,6 +182,7 @@ fn App() -> Element {
                 }
                 Err(e) => {
                     stop_event_logging(); // Clean up
+                    current_events_path.set(None);
                     status_message.set(format!("Error: {}", e));
                     eprintln!("Failed to start recording: {e}");
                 }
@@ -154,28 +195,35 @@ fn App() -> Element {
         document::Link { rel: "stylesheet", href: MAIN_CSS }
         document::Link { rel: "stylesheet", href: TAILWIND_CSS }
 
-        // Recording controls overlay
-        div { class: "fixed top-4 right-4 z-50 bg-gray-900/90 rounded-lg p-4 shadow-xl border border-gray-700",
-            div { class: "flex items-center gap-4",
-                // Recording indicator
-                if is_rec() {
-                    div { class: "w-3 h-3 bg-red-500 rounded-full animate-pulse" }
-                } else {
-                    div { class: "w-3 h-3 bg-gray-500 rounded-full" }
+        // Recording controls overlay - compact and polished
+        div {
+            class: "fixed top-4 right-4 z-50 rounded-xl px-4 py-2.5 shadow-2xl border border-gray-600/50",
+            style: "background: rgba(17, 24, 39, 0.95); backdrop-filter: blur(12px);",
+            div { class: "flex items-center gap-3",
+                // Recording indicator dot
+                div {
+                    class: if is_rec() {
+                        "w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shadow-lg shadow-red-500/50"
+                    } else {
+                        "w-2.5 h-2.5 rounded-full bg-gray-500"
+                    }
                 }
 
-                // Status text
-                span { class: "text-white text-sm", "{status_message}" }
+                // Status text - more compact
+                span {
+                    class: if is_rec() { "text-red-400 text-sm font-medium" } else { "text-gray-400 text-sm" },
+                    "{status_message}"
+                }
 
-                // Toggle button
+                // Toggle button - sleeker
                 button {
                     class: if is_rec() {
-                        "px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition"
+                        "px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm font-medium transition-all shadow-lg shadow-red-600/30"
                     } else {
-                        "px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition"
+                        "px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-all shadow-lg shadow-emerald-600/30"
                     },
                     onclick: toggle_recording,
-                    if is_rec() { "Stop" } else { "Record" }
+                    if is_rec() { "■ Stop" } else { "● Record" }
                 }
             }
         }
