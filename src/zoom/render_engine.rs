@@ -2,9 +2,6 @@
 //!
 //! Handles offscreen rendering with shaders for zoom, crop, and cinematic effects.
 
-use std::sync::Arc;
-use wgpu::util::DeviceExt;
-
 /// Uniforms for the zoom shader
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -44,7 +41,9 @@ pub struct RenderEngine {
 }
 
 impl RenderEngine {
+    #[tracing::instrument]
     pub async fn new(width: u32, height: u32) -> Result<Self, Box<dyn std::error::Error>> {
+        tracing::info!("Initializing WGPU RenderEngine for {}x{}", width, height);
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -185,6 +184,7 @@ impl RenderEngine {
         })
     }
 
+    #[tracing::instrument(skip(self, data, uniforms))]
     pub fn process_frame(
         &mut self,
         data: &[u8],

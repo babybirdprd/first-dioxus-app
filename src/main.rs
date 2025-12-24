@@ -30,6 +30,9 @@ const MAIN_CSS: Asset = asset!("/assets/styling/main.css");
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
 fn main() {
+    // Initialize diagnostics
+    let _guard = zoom::diagnostics::init_diagnostics();
+
     // Initialize config
     let config = Config::load();
     println!("DemoRecorder starting...");
@@ -56,9 +59,9 @@ fn main() {
 
     // Initialize system tray
     let _tray = match tray::create_tray() {
-        Ok((tray_icon, menu_ids)) => {
+        Ok(tray) => {
             println!("System tray initialized");
-            Some((tray_icon, menu_ids))
+            Some(tray)
         }
         Err(e) => {
             eprintln!("Failed to create tray icon: {e}");
@@ -103,6 +106,7 @@ fn App() -> Element {
                 let currently_recording = is_rec();
                 if currently_recording {
                     // Stop recording and save events
+                    tracing::info!("Stopping recording (Hotkey)...");
                     let events = stop_event_logging();
                     stop_recording();
                     is_rec.set(false);
@@ -145,6 +149,7 @@ fn App() -> Element {
 
                     match start_recording(config) {
                         Ok(_) => {
+                            tracing::info!("Recording started (Hotkey)");
                             is_rec.set(true);
                             status_message.set("Recording...".to_string());
                             println!("Hotkey: Recording started");
@@ -166,6 +171,7 @@ fn App() -> Element {
         let currently_recording = is_rec();
         if currently_recording {
             // Stop recording and event logging
+            tracing::info!("Stopping recording (UI)...");
             let events = stop_event_logging();
             stop_recording();
             is_rec.set(false);

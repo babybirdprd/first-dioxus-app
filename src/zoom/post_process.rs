@@ -58,7 +58,9 @@ pub struct ZoomKeyframe {
 }
 
 /// Generate zoom keyframes from recorded events
+#[tracing::instrument(skip(log, config))]
 pub fn generate_keyframes(log: &EventLog, config: &PostProcessConfig) -> Vec<ZoomKeyframe> {
+    tracing::info!("Generating keyframes from {} events", log.events.len());
     let mut keyframes = Vec::new();
 
     // Normalize coordinates using the resolution the events were recorded in
@@ -85,7 +87,13 @@ pub fn generate_keyframes(log: &EventLog, config: &PostProcessConfig) -> Vec<Zoo
     }
 
     // Merge/chain overlapping keyframes
+    let initial_count = keyframes.len();
     merge_overlapping_keyframes(&mut keyframes);
+    tracing::info!(
+        "Keyframe generation complete: {} -> {} keyframes",
+        initial_count,
+        keyframes.len()
+    );
 
     keyframes
 }
@@ -163,6 +171,13 @@ fn calculate_camera_at_time(
         let cx = start_cx + (kf.center_x - start_cx) * eased_pan_t;
         let cy = start_cy + (kf.center_y - start_cy) * eased_pan_t;
 
+        tracing::debug!(
+            time = %format!("{:.3}", time_secs),
+            zoom = %format!("{:.2}", zoom),
+            center = %format!("{:.3},{:.3}", cx, cy),
+            "Camera State"
+        );
+
         return (zoom, cx, cy);
     }
 
@@ -181,10 +196,12 @@ fn ease_in_out(t: f32) -> f32 {
 // apply_zoom_to_frame removed in favor of RenderEngine
 
 /// Apply post-processing using video-rs
+#[tracing::instrument(skip(log, config))]
 pub fn apply_zoom_effects(
     log: &EventLog,
     config: &PostProcessConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    tracing::info!("Applying zoom effects to: {}", config.input_path);
     use video_rs::decode::Decoder;
     use video_rs::encode::{Encoder, Settings};
 

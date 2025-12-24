@@ -1,82 +1,19 @@
 //! System tray icon for DemoRecorder
 //! Provides background access to recording controls
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem},
-    TrayIcon, TrayIconBuilder,
-};
+use tray_icon::{TrayIcon, TrayIconBuilder};
 
-static SHOULD_QUIT: AtomicBool = AtomicBool::new(false);
-
-/// Check if app should quit
-pub fn should_quit() -> bool {
-    SHOULD_QUIT.load(Ordering::SeqCst)
-}
-
-/// Menu item IDs
-pub struct TrayMenuIds {
-    pub record: MenuItem,
-    pub settings: MenuItem,
-    pub quit: MenuItem,
-}
-
-/// Create the system tray icon with menu
-pub fn create_tray() -> Result<(TrayIcon, TrayMenuIds), Box<dyn std::error::Error>> {
-    // Create menu items
-    let record = MenuItem::new("Start Recording", true, None);
-    let settings = MenuItem::new("Settings", true, None);
-    let quit = MenuItem::new("Quit", true, None);
-
-    // Build menu
-    let menu = Menu::new();
-    menu.append(&record)?;
-    menu.append(&settings)?;
-    menu.append(&quit)?;
-
+/// Create the system tray icon
+pub fn create_tray() -> Result<TrayIcon, Box<dyn std::error::Error>> {
     // Create tray icon (using a simple colored icon)
     let icon = create_icon()?;
 
     let tray = TrayIconBuilder::new()
-        .with_menu(Box::new(menu))
         .with_tooltip("DemoRecorder - Ctrl+Shift+F9")
         .with_icon(icon)
         .build()?;
 
-    Ok((
-        tray,
-        TrayMenuIds {
-            record,
-            settings,
-            quit,
-        },
-    ))
-}
-
-/// Handle tray menu events
-pub fn handle_menu_event(
-    event: MenuEvent,
-    menu_ids: &TrayMenuIds,
-    on_toggle_recording: impl Fn(),
-    on_settings: impl Fn(),
-) {
-    if event.id == menu_ids.record.id() {
-        on_toggle_recording();
-    } else if event.id == menu_ids.settings.id() {
-        on_settings();
-    } else if event.id == menu_ids.quit.id() {
-        SHOULD_QUIT.store(true, Ordering::SeqCst);
-    }
-}
-
-/// Update record menu item text based on recording state
-pub fn update_record_menu(menu_ids: &TrayMenuIds, is_recording: bool) {
-    let text = if is_recording {
-        "Stop Recording"
-    } else {
-        "Start Recording"
-    };
-    menu_ids.record.set_text(text);
+    Ok(tray)
 }
 
 /// Create a simple colored icon (red circle for recording indicator)

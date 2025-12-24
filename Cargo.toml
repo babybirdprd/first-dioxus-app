@@ -21,6 +21,9 @@ futures-util = "0.3"
 wgpu = "22.1"
 bytemuck = { version = "1.19", features = ["derive"] }
 pollster = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 # Screen capture - platform specific
 [target.'cfg(windows)'.dependencies]

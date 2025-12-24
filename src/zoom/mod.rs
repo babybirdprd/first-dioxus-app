@@ -1,4 +1,4 @@
-pub mod camera;
+pub mod diagnostics;
 pub mod event_log;
 pub mod post_process;
 pub mod render_engine;
