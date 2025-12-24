@@ -164,11 +164,21 @@ pub mod windows_impl {
 
     /// Start recording the primary monitor
     pub fn start_recording(
-        config: RecorderConfig,
+        mut config: RecorderConfig,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         set_recording(true);
 
         let primary_monitor = Monitor::primary()?;
+
+        // Get actual monitor dimensions
+        let actual_width = primary_monitor.width()?;
+        let actual_height = primary_monitor.height()?;
+
+        // Update config with actual dimensions
+        config.width = actual_width;
+        config.height = actual_height;
+
+        println!("Monitor resolution: {}x{}", actual_width, actual_height);
 
         let settings = Settings::new(
             primary_monitor,

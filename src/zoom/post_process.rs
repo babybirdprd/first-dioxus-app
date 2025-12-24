@@ -196,7 +196,26 @@ pub fn apply_zoom_effects(
 
     println!("Running video-rs post-processing...");
 
-    let keyframes = generate_keyframes(events, config);
+    // Initialize video-rs
+    video_rs::init()?;
+
+    // Open input video FIRST to get actual dimensions
+    let source = Path::new(&config.input_path);
+    let mut decoder = Decoder::new(source)?;
+
+    // Get video properties
+    let (width, height) = decoder.size();
+    let frame_rate = decoder.frame_rate();
+    println!("Input: {}x{} @ {:.2} fps", width, height, frame_rate);
+
+    // Create a config copy with actual video dimensions for keyframe generation
+    let mut actual_config = config.clone();
+    actual_config.width = width as u32;
+    actual_config.height = height as u32;
+    actual_config.fps = frame_rate as u32;
+
+    // NOW generate keyframes with actual dimensions
+    let keyframes = generate_keyframes(events, &actual_config);
     println!(
         "Generated {} keyframes from {} events",
         keyframes.len(),
@@ -208,18 +227,6 @@ pub fn apply_zoom_effects(
         std::fs::copy(&config.input_path, &config.output_path)?;
         return Ok(());
     }
-
-    // Initialize video-rs
-    video_rs::init()?;
-
-    // Open input video
-    let source = Path::new(&config.input_path);
-    let mut decoder = Decoder::new(source)?;
-
-    // Get video properties
-    let (width, height) = decoder.size();
-    let frame_rate = decoder.frame_rate();
-    println!("Input: {}x{} @ {:.2} fps", width, height, frame_rate);
 
     // Create encoder for output
     let destination = Path::new(&config.output_path);
