@@ -29,8 +29,22 @@ pub enum RecordedEvent {
     CursorMove { x: i32, y: i32, timestamp_ms: u64 },
 }
 
+/// Metadata for the recording session
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RecordingMetadata {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Complete event log with metadata
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EventLog {
+    pub metadata: RecordingMetadata,
+    pub events: Vec<RecordedEvent>,
+}
+
 /// Start the event logger
-pub fn start_event_logging() {
+pub fn start_event_logging(width: u32, height: u32) {
     let mut log = EVENTS_LOG.lock().unwrap();
     *log = Some(EventLoggerState {
         events: Vec::new(),
@@ -42,7 +56,8 @@ pub fn start_event_logging() {
         },
         last_sample_time: Instant::now(),
     });
-    println!("Event logging started");
+    // We effectively store width/height in the state if needed, but for now we'll pass them to stop()
+    println!("Event logging started for {}x{}", width, height);
 }
 
 /// Update the event logger (call periodically during recording)
@@ -89,21 +104,50 @@ pub fn stop_event_logging() -> Vec<RecordedEvent> {
     }
 }
 
-/// Save events to JSON file
-pub fn save_events(
-    events: &[RecordedEvent],
-    path: &PathBuf,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let json = serde_json::to_string_pretty(events)?;
+/// Save event log to JSON file
+pub fn save_event_log(log: &EventLog, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let json = serde_json::to_string_pretty(log)?;
     std::fs::write(path, json)?;
     Ok(())
 }
 
-/// Load events from JSON file
-pub fn load_events(path: &PathBuf) -> Result<Vec<RecordedEvent>, Box<dyn std::error::Error>> {
+/// Load event log from JSON file
+pub fn load_event_log(path: &PathBuf) -> Result<EventLog, Box<dyn std::error::Error>> {
     let json = std::fs::read_to_string(path)?;
+    // Try loading as new EventLog format first
+    if let Ok(log) = serde_json::from_str::<EventLog>(&json) {
+        return Ok(log);
+    }
+    // Fallback for old format (just Vec<RecordedEvent>)
     let events: Vec<RecordedEvent> = serde_json::from_str(&json)?;
-    Ok(events)
+    Ok(EventLog {
+        metadata: RecordingMetadata {
+            width: 1920,
+            height: 1080,
+        }, // Default for old recordings
+        events,
+    })
+}
+
+// Deprecated: keep for compatibility during migration
+pub fn save_events(
+    events: &[RecordedEvent],
+    path: &PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    save_event_log(
+        &EventLog {
+            metadata: RecordingMetadata {
+                width: 1920,
+                height: 1080,
+            },
+            events: events.to_vec(),
+        },
+        path,
+    )
+}
+
+pub fn load_events(path: &PathBuf) -> Result<Vec<RecordedEvent>, Box<dyn std::error::Error>> {
+    Ok(load_event_log(path)?.events)
 }
 
 /// Event logger struct for manual control (optional)

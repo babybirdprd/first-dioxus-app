@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 /// Request to process zoom effects in background
 struct ZoomRequest {
-    events: Vec<crate::zoom::RecordedEvent>,
+    event_log: crate::zoom::EventLog,
     config: crate::zoom::PostProcessConfig,
     output_name: String,
 }
@@ -191,11 +191,14 @@ fn RecordingCard(entry: RecordingEntry) -> Element {
         move |mut rx: dioxus::prelude::UnboundedReceiver<ZoomRequest>| async move {
             while let Some(request) = rx.next().await {
                 processing.set(true);
-                status_msg.set(format!("Processing {} events...", request.events.len()));
+                status_msg.set(format!(
+                    "Processing {} events...",
+                    request.event_log.events.len()
+                ));
 
                 // Run the heavy work in spawn_blocking
                 let result = tokio::task::spawn_blocking(move || {
-                    crate::zoom::apply_zoom_effects(&request.events, &request.config)
+                    crate::zoom::apply_zoom_effects(&request.event_log, &request.config)
                         .map_err(|e| e.to_string())
                 })
                 .await;
@@ -244,16 +247,16 @@ fn RecordingCard(entry: RecordingEntry) -> Element {
 
             status_msg.set("Loading events...".to_string());
 
-            // Load events from JSON file
-            let events = match crate::zoom::load_events(&events_path) {
-                Ok(e) => e,
+            // Load event log from JSON file
+            let event_log = match crate::zoom::load_event_log(&events_path) {
+                Ok(log) => log,
                 Err(err) => {
                     status_msg.set(format!("Failed to load events: {}", err));
                     return;
                 }
             };
 
-            if events.is_empty() {
+            if event_log.events.is_empty() {
                 status_msg.set("No events to process".to_string());
                 return;
             }
@@ -284,7 +287,7 @@ fn RecordingCard(entry: RecordingEntry) -> Element {
 
             // Send work to the coroutine (non-blocking!)
             zoom_worker.send(ZoomRequest {
-                events,
+                event_log,
                 config,
                 output_name,
             });

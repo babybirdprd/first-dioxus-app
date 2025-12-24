@@ -109,23 +109,38 @@ fn App() -> Element {
 
                     // Save events to file
                     if let Some(ref path) = *current_events_path.read() {
-                        if let Err(e) = zoom::save_events(&events, path) {
+                        let event_count = events.len();
+                        let monitor = windows_capture::monitor::Monitor::primary().unwrap();
+                        let event_log = zoom::EventLog {
+                            metadata: zoom::RecordingMetadata {
+                                width: monitor.width().unwrap_or(1920),
+                                height: monitor.height().unwrap_or(1080),
+                            },
+                            events,
+                        };
+                        if let Err(e) = zoom::save_event_log(&event_log, path) {
                             eprintln!("Failed to save events: {e}");
                         } else {
                             println!("Events saved to: {:?}", path);
                         }
-                    }
 
-                    let event_count = events.len();
-                    status_message.set(format!("✓ Saved {} events", event_count));
-                    println!("Hotkey: Recording stopped, {} events captured", event_count);
+                        status_message.set(format!("✓ Saved {} events", event_count));
+                        println!("Hotkey: Recording stopped, {} events captured", event_count);
+                    }
 
                     // Set a timestamp for auto-reset (handled in the polling loop)
                     saved_at.set(Some(std::time::Instant::now()));
                 } else {
                     // Start recording and event logging
-                    start_event_logging();
-                    let config = RecorderConfig::default();
+                    let monitor = windows_capture::monitor::Monitor::primary().unwrap();
+                    let width = monitor.width().unwrap_or(1920);
+                    let height = monitor.height().unwrap_or(1080);
+
+                    start_event_logging(width, height);
+                    let mut config = RecorderConfig::default();
+                    config.width = width;
+                    config.height = height;
+
                     current_events_path.set(Some(config.events_path.clone()));
 
                     match start_recording(config) {
@@ -157,28 +172,43 @@ fn App() -> Element {
 
             // Save events to file (same as hotkey handler)
             if let Some(ref path) = *current_events_path.read() {
-                if let Err(e) = zoom::save_events(&events, path) {
+                let event_count = events.len();
+                let monitor = windows_capture::monitor::Monitor::primary().unwrap();
+                let event_log = zoom::EventLog {
+                    metadata: zoom::RecordingMetadata {
+                        width: monitor.width().unwrap_or(1920),
+                        height: monitor.height().unwrap_or(1080),
+                    },
+                    events,
+                };
+                if let Err(e) = zoom::save_event_log(&event_log, path) {
                     eprintln!("Failed to save events: {e}");
                 } else {
                     println!("Events saved to: {:?}", path);
                 }
-            }
 
-            let event_count = events.len();
-            status_message.set(format!("✓ Saved {} events", event_count));
-            println!("Recording stopped, {} events captured", event_count);
+                status_message.set(format!("✓ Saved {} events", event_count));
+                println!("Recording stopped, {} events captured", event_count);
+            }
             saved_at.set(Some(std::time::Instant::now()));
         } else {
             // Start recording and event logging
-            start_event_logging();
-            let config = RecorderConfig::default();
+            let monitor = windows_capture::monitor::Monitor::primary().unwrap();
+            let width = monitor.width().unwrap_or(1920);
+            let height = monitor.height().unwrap_or(1080);
+
+            start_event_logging(width, height);
+            let mut config = RecorderConfig::default();
+            config.width = width;
+            config.height = height;
+
             current_events_path.set(Some(config.events_path.clone()));
 
             match start_recording(config) {
                 Ok(_) => {
                     is_rec.set(true);
                     status_message.set("Recording...".to_string());
-                    println!("Recording started");
+                    println!("Recording started at {}x{}", width, height);
                 }
                 Err(e) => {
                     stop_event_logging(); // Clean up

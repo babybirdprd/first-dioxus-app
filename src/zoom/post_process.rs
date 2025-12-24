@@ -2,7 +2,7 @@
 //!
 //! Uses video-rs for frame-by-frame processing with zoom/pan effects
 
-use super::event_log::RecordedEvent;
+use super::event_log::{EventLog, RecordedEvent};
 use super::render_engine::{RenderEngine, RenderUniforms};
 use std::path::Path;
 
@@ -58,20 +58,21 @@ pub struct ZoomKeyframe {
 }
 
 /// Generate zoom keyframes from recorded events
-pub fn generate_keyframes(
-    events: &[RecordedEvent],
-    config: &PostProcessConfig,
-) -> Vec<ZoomKeyframe> {
+pub fn generate_keyframes(log: &EventLog, config: &PostProcessConfig) -> Vec<ZoomKeyframe> {
     let mut keyframes = Vec::new();
 
-    for event in events {
+    // Normalize coordinates using the resolution the events were recorded in
+    let screen_width = log.metadata.width as f32;
+    let screen_height = log.metadata.height as f32;
+
+    for event in &log.events {
         if let RecordedEvent::Click { x, y, timestamp_ms } = event {
             let start_time = *timestamp_ms as f32 / 1000.0;
             let end_time = start_time + config.hold_duration + config.zoom_duration * 2.0;
 
-            // Normalize coordinates to 0-1 range
-            let center_x = *x as f32 / config.width as f32;
-            let center_y = *y as f32 / config.height as f32;
+            // Normalize coordinates to 0-1 range based on RECORDING dimensions
+            let center_x = *x as f32 / screen_width;
+            let center_y = *y as f32 / screen_height;
 
             keyframes.push(ZoomKeyframe {
                 start_time,
@@ -83,31 +84,27 @@ pub fn generate_keyframes(
         }
     }
 
-    // Merge overlapping keyframes
+    // Merge/chain overlapping keyframes
     merge_overlapping_keyframes(&mut keyframes);
 
     keyframes
 }
 
-/// Merge overlapping zoom keyframes
+/// Adjust keyframes so they don't overlap, creating a sequential path
 fn merge_overlapping_keyframes(keyframes: &mut Vec<ZoomKeyframe>) {
     if keyframes.len() < 2 {
         return;
     }
 
+    // Sort by start time
     keyframes.sort_by(|a, b| a.start_time.partial_cmp(&b.start_time).unwrap());
 
-    let mut i = 0;
-    while i < keyframes.len() - 1 {
+    // Sequential Pathing: If a new click happens while another is active,
+    // the previous one should cut short to allow the new one to take over.
+    for i in 0..keyframes.len() - 1 {
         if keyframes[i].end_time > keyframes[i + 1].start_time {
-            // Extend the first keyframe to cover both
-            keyframes[i].end_time = keyframes[i + 1].end_time;
-            // Update center to the newer click
-            keyframes[i].center_x = keyframes[i + 1].center_x;
-            keyframes[i].center_y = keyframes[i + 1].center_y;
-            keyframes.remove(i + 1);
-        } else {
-            i += 1;
+            // Cut previous short at the exact moment the next one starts
+            keyframes[i].end_time = keyframes[i + 1].start_time;
         }
     }
 }
@@ -132,17 +129,21 @@ fn calculate_camera_at_time(
     if let Some(idx) = current_idx {
         let kf = &keyframes[idx];
         let zoom_in_end = kf.start_time + config.zoom_duration;
-        let hold_end = zoom_in_end + config.hold_duration;
+
+        // Ensure hold/zoom-out doesn't exceed the keyframe duration (which might be cut short by next click)
+        let hold_end = (zoom_in_end + config.hold_duration).min(kf.end_time);
 
         // Zoom Interpolation
         let zoom = if time_secs < zoom_in_end {
             let t = (time_secs - kf.start_time) / config.zoom_duration;
             let eased_t = ease_in_out(t);
+            // Zoom in from 1.0 to Target
             1.0 + (kf.zoom - 1.0) * eased_t
         } else if time_secs < hold_end {
             kf.zoom
         } else {
-            let t = (time_secs - hold_end) / config.zoom_duration;
+            // Zoom out back to 1.0
+            let t = ((time_secs - hold_end) / config.zoom_duration).clamp(0.0, 1.0);
             let eased_t = ease_in_out(t);
             kf.zoom - (kf.zoom - 1.0) * eased_t
         };
@@ -155,7 +156,7 @@ fn calculate_camera_at_time(
             (0.5, 0.5)
         };
 
-        // Pan follows the zoom-in duration
+        // The pan should start as soon as the keyframe begins
         let pan_t = ((time_secs - kf.start_time) / config.zoom_duration).clamp(0.0, 1.0);
         let eased_pan_t = ease_in_out(pan_t);
 
@@ -181,7 +182,7 @@ fn ease_in_out(t: f32) -> f32 {
 
 /// Apply post-processing using video-rs
 pub fn apply_zoom_effects(
-    events: &[RecordedEvent],
+    log: &EventLog,
     config: &PostProcessConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use video_rs::decode::Decoder;
@@ -208,11 +209,11 @@ pub fn apply_zoom_effects(
     actual_config.fps = frame_rate as u32;
 
     // NOW generate keyframes with actual dimensions
-    let keyframes = generate_keyframes(events, &actual_config);
+    let keyframes = generate_keyframes(log, &actual_config);
     println!(
         "Generated {} keyframes from {} events",
         keyframes.len(),
-        events.len()
+        log.events.len()
     );
 
     if keyframes.is_empty() {
@@ -334,8 +335,8 @@ pub fn apply_zoom_effects(
 
 // Keep the old generate_ffmpeg functions for reference but unused
 #[allow(dead_code)]
-pub fn generate_ffmpeg_command(events: &[RecordedEvent], config: &PostProcessConfig) -> String {
-    let keyframes = generate_keyframes(events, config);
+pub fn generate_ffmpeg_command(log: &EventLog, config: &PostProcessConfig) -> String {
+    let keyframes = generate_keyframes(log, config);
 
     if keyframes.is_empty() {
         return format!(
