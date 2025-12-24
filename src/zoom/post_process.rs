@@ -148,14 +148,25 @@ fn get_cursor_pos_at(time_secs: f32, log: &EventLog) -> (f32, f32) {
     nearest_pos
 }
 
+/// Detailed camera state for telemetry
+pub struct CameraState {
+    pub zoom: f32,
+    pub cx: f32,
+    pub cy: f32,
+    pub target_cx: f32,
+    pub target_cy: f32,
+    pub mouse_cx: f32,
+    pub mouse_cy: f32,
+}
+
 /// Calculate camera state at a given time using "Magnetic Camera" interpolation
 fn calculate_camera_at_time(
     time_secs: f32,
     keyframes: &[ZoomKeyframe],
     log: &EventLog,
     config: &PostProcessConfig,
-) -> (f32, f32, f32) {
-    // Returns (zoom_level, center_x, center_y)
+) -> CameraState {
+    // Returns detailed camera state
 
     // 1. Find indices of previous, current, and next keyframes
     let mut current_idx = None;
@@ -203,15 +214,15 @@ fn calculate_camera_at_time(
         let mut cx = start_cx + (kf.center_x - start_cx) * eased_pan_t;
         let mut cy = start_cy + (kf.center_y - start_cy) * eased_pan_t;
 
+        let (mouse_cx, mouse_cy) = get_cursor_pos_at(time_secs, log);
+
         // "Cursor Follow" - Magnetic drift towards the live cursor during the hold phase
         if time_secs > zoom_in_end && time_secs < hold_end {
-            let (cur_x, cur_y) = get_cursor_pos_at(time_secs, log);
-
             // Apply a 30% magnetic pull towards the cursor
             // This makes the camera feel "alive" and follow the action
             let follow_intensity = 0.35;
-            cx = cx + (cur_x - cx) * follow_intensity;
-            cy = cy + (cur_y - cy) * follow_intensity;
+            cx = cx + (mouse_cx - cx) * follow_intensity;
+            cy = cy + (mouse_cy - cy) * follow_intensity;
         }
 
         tracing::debug!(
@@ -221,12 +232,28 @@ fn calculate_camera_at_time(
             "Camera State"
         );
 
-        return (zoom, cx, cy);
+        return CameraState {
+            zoom,
+            cx,
+            cy,
+            target_cx: kf.center_x,
+            target_cy: kf.center_y,
+            mouse_cx,
+            mouse_cy,
+        };
     }
 
     // No zoom active - return to center slowly if we just finished a keyframe
     // TODO: Implement "return to center" panning
-    (1.0, 0.5, 0.5)
+    CameraState {
+        zoom: 1.0,
+        cx: 0.5,
+        cy: 0.5,
+        target_cx: 0.5,
+        target_cy: 0.5,
+        mouse_cx: 0.5,
+        mouse_cy: 0.5,
+    }
 }
 
 /// Smooth ease in/out curve
@@ -301,6 +328,13 @@ pub fn apply_zoom_effects(
     let mut current_cx = 0.5;
     let mut current_cy = 0.5;
 
+    use crate::zoom::diagnostics::{TelemetryFrame, TelemetrySession};
+    let mut telemetry = TelemetrySession {
+        input_path: config.input_path.clone(),
+        output_path: config.output_path.clone(),
+        ..Default::default()
+    };
+
     // Process each frame
     for frame_result in decoder.decode_iter() {
         let (time, frame) = match frame_result {
@@ -317,18 +351,34 @@ pub fn apply_zoom_effects(
         };
         let time_secs = time.as_secs_f64() as f32;
 
+        // Calculate camera state at this time
+        let state = calculate_camera_at_time(time_secs, &keyframes, log, config);
+
+        // Record telemetry
+        telemetry.frames.push(TelemetryFrame {
+            frame_index: processed,
+            time_secs,
+            zoom: state.zoom,
+            cx: state.cx,
+            cy: state.cy,
+            target_cx: state.target_cx,
+            target_cy: state.target_cy,
+            mouse_cx: state.mouse_cx,
+            mouse_cy: state.mouse_cy,
+            velocity_cx: state.cx - current_cx,
+            velocity_cy: state.cy - current_cy,
+        });
+
         let prev_zoom = current_zoom;
         let prev_cx = current_cx;
         let prev_cy = current_cy;
 
-        // Calculate camera state at this time
-        let (zoom, cx, cy) = calculate_camera_at_time(time_secs, &keyframes, log, config);
-        current_zoom = zoom;
-        current_cx = cx;
-        current_cy = cy;
+        current_zoom = state.zoom;
+        current_cx = state.cx;
+        current_cy = state.cy;
 
         // OPTIMIZATION: If no zoom needed AND we wasn't zooming before, pass through original frame directly
-        if (zoom - 1.0).abs() < 0.001 && (prev_zoom - 1.0).abs() < 0.001 {
+        if (current_zoom - 1.0).abs() < 0.001 && (prev_zoom - 1.0).abs() < 0.001 {
             if let Err(e) = encoder.encode(&frame, time) {
                 println!("Error encoding passthrough frame {}: {}", processed, e);
             }
@@ -389,10 +439,12 @@ pub fn apply_zoom_effects(
     // Finish encoding
     encoder.finish()?;
 
-    println!(
-        "\nVideo-rs processing complete! {} frames processed.",
-        processed
-    );
+    tracing::info!("Post-processing complete. Processed {} frames.", processed);
+
+    // Save telemetry
+    let telemetry_path = std::path::Path::new(&config.output_path).with_extension("telemetry.json");
+    let _ = crate::zoom::diagnostics::save_telemetry(&telemetry, &telemetry_path);
+
     Ok(())
 }
 
