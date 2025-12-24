@@ -1,68 +1,58 @@
-# Development
+# DemoRecorder
 
-Your new jumpstart project includes basic organization with an organized `assets` folder and a `components` folder.
-If you chose to develop with the router feature, you will also have a `views` folder.
+A high-performance screen recorder for developers and creators, featuring smart auto-zoom, cinematic motion blur, and professional GPU-accelerated post-processing. Inspired by Screen Studio, Motionik, and FocuSee.
 
-```
-project/
-├─ assets/ # Any assets that are used by the app should be placed here
-├─ src/
-│  ├─ main.rs # The entrypoint for the app. It also defines the routes for the app.
-│  ├─ components/
-│  │  ├─ mod.rs # Defines the components module
-│  │  ├─ hero.rs # The Hero component for use in the home page
-│  ├─ views/ # The views each route will render in the app.
-│  │  ├─ mod.rs # Defines the module for the views route and re-exports the components for each route
-│  │  ├─ blog.rs # The component that will render at the /blog/:id route
-│  │  ├─ home.rs # The component that will render at the / route
-├─ Cargo.toml # The Cargo.toml file defines the dependencies and feature flags for your project
-```
+## ✨ Features
 
-### Automatic Tailwind (Dioxus 0.7+)
+- **🎯 Smart Auto-Zoom**: Automatically zooms in on mouse clicks and follows your cursor.
+- **🎥 Magnetic Camera**: Cinematic easing and smooth panning between points of interest.
+- **🌪️ Motion Blur**: High-quality cinematic motion blur for all transitions and cursor movements.
+- **🛠️ GPU Engine**: WGPU-powered rendering pipeline for 4K exports at lightning speed.
+- **🌈 Modern Aesthetics**: Customizable backgrounds, drop shadows, and rounded corners.
 
-As of Dioxus 0.7, there no longer is a need to manually install tailwind. Simply `dx serve` and you're good to go!
+## 📊 Feature Matrix
 
-Automatic tailwind is supported by checking for a file called `tailwind.css` in your app's manifest directory (next to Cargo.toml). To customize the file, use the dioxus.toml:
+| Category | Feature | DemoRecorder | Screen Studio | Motionik | FocuSee |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **System** | Platform | Windows (Active) | macOS Only | Win/macOS | Win/macOS |
+| | GPU Acceleration | ⏳ (In Progress) | ✅ | ✅ | ✅ |
+| **Camera** | Auto-Zoom on Click | ✅ | ✅ | ✅ | ✅ |
+| | Follow Cursor | ✅ | ✅ | ✅ | ✅ |
+| | Magnetic Panning | ⏳ (In Progress) | ✅ | ✅ | ✅ |
+| | Manual Keyframes | ❌ | ✅ | ✅ | ✅ |
+| **Effects** | Cinematic Motion Blur | ⏳ (Planned) | ✅ | ✅ | ✅ |
+| | Click Ripples/Spotlight| ❌ | ✅ | ✅ | ✅ |
+| | Backgrounds/Shadows | ❌ | ✅ | ✅ | ✅ |
+| **Audio/AI** | AI Subtitles/Captions | ❌ | ⏳ (Planned) | ✅ | ✅ |
+| | Silence Removal | ❌ | ❌ | ❌ | ✅ |
+| | Audio Enhancement | ❌ | ⏳ (Planned) | ✅ | ✅ |
+| **Export** | 4K 60fps | ✅ | ✅ | ✅ | ✅ |
+| | GIF Export | ❌ | ✅ | ✅ | ✅ |
+| | Export Presets | ❌ | ✅ | ✅ | ✅ |
 
-```toml
-[application]
-tailwind_input = "my.css"
-tailwind_output = "assets/out.css"
-```
+## 🚀 Roadmap
 
-### Tailwind Manual Install
+### Phase 3: GPU Engine (Current)
+- [ ] **WGPU Pipeline**: Move all rendering to the GPU for real-time export performance.
+- [ ] **Magnetic Camera**: Smooth interpolation and panning between click positions.
+- [ ] **Advanced Filtering**: Bicubic and Lanczos resampling for pixel-perfect zooms.
 
-To use tailwind plugins or manually customize tailwind, you can can install the Tailwind CLI and use it directly.
+### Phase 4: Cinematic Polish
+- [ ] **Motion Blur**: Implementation of velocity-aware motion blur.
+- [ ] **Beautify**: Customizable backgrounds (gradients/wallpapers), shadows, and corner rounding.
+- [ ] **Cursor Effects**: Click ripples, spotlight effects, and cursor smoothing.
 
-1. Install npm: https://docs.npmjs.com/downloading-and-installing-node-js-and-npm
-2. Install the Tailwind CSS CLI: https://tailwindcss.com/docs/installation/tailwind-cli
-3. Run the following command in the root of the project to start the Tailwind CSS compiler:
+### Phase 5: AI & Smart Features
+- [ ] **Smart Trim**: Automatically remove long silences or static sections.
+- [ ] **AI Voice**: Microphone noise reduction and enhancement.
+- [ ] **Captions**: Generate and burn-in subtitles automatically.
 
-```bash
-npx @tailwindcss/cli -i ./input.css -o ./assets/tailwind.css --watch
-```
+## 🛠️ Getting Started
 
-### Serving Your App
+1. **Serve the App**: `dx serve --platform desktop`
+2. **Record**: Press `Ctrl+Shift+F9` to toggle recording.
+3. **Capture**: Choose between "Primary Monitor" or "Foreground Window" in Settings.
+4. **Process**: Go to Dashboard and click "🔍 Zoom" on any recording.
 
-Run the following command in the root of your project to start developing with the default platform:
-
-```bash
-dx serve
-```
-
-To run for a different platform, use the `--platform platform` flag. E.g.
-```bash
-dx serve --platform desktop
-
-
-```
-
-
-Phase 2 Complete! ✅
-
-All Phase 2 features done:
-
-✅ Settings UI at /settings with all options
-✅ Hotkey fixed - Ctrl+Shift+F9 only triggers on press (not release)
-✅ Recording indicator - red pulsing border when recording
-✅ Capture source - dropdown to choose Primary Monitor or Foreground Window
+---
+Built with [Dioxus](https://dioxus.rs) and [Rust](https://rust-lang.org).

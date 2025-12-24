@@ -3,7 +3,7 @@
 //! Uses video-rs for frame-by-frame processing with zoom/pan effects
 
 use super::event_log::RecordedEvent;
-use image::{imageops, ImageBuffer, Rgb};
+use super::render_engine::{RenderEngine, RenderUniforms};
 use std::path::Path;
 
 /// Configuration for post-processing
@@ -112,38 +112,61 @@ fn merge_overlapping_keyframes(keyframes: &mut Vec<ZoomKeyframe>) {
     }
 }
 
-/// Calculate zoom level at a given time
-fn calculate_zoom_at_time(
+/// Calculate camera state at a given time using "Magnetic Camera" interpolation
+fn calculate_camera_at_time(
     time_secs: f32,
     keyframes: &[ZoomKeyframe],
     config: &PostProcessConfig,
 ) -> (f32, f32, f32) {
     // Returns (zoom_level, center_x, center_y)
-    for kf in keyframes {
+
+    // 1. Find indices of previous, current, and next keyframes
+    let mut current_idx = None;
+    for (i, kf) in keyframes.iter().enumerate() {
         if time_secs >= kf.start_time && time_secs <= kf.end_time {
-            let zoom_in_end = kf.start_time + config.zoom_duration;
-            let hold_end = zoom_in_end + config.hold_duration;
-
-            let zoom = if time_secs < zoom_in_end {
-                // Zooming in - smooth ease
-                let t = (time_secs - kf.start_time) / config.zoom_duration;
-                let eased_t = ease_in_out(t);
-                1.0 + (kf.zoom - 1.0) * eased_t
-            } else if time_secs < hold_end {
-                // Holding zoom
-                kf.zoom
-            } else {
-                // Zooming out - smooth ease
-                let t = (time_secs - hold_end) / config.zoom_duration;
-                let eased_t = ease_in_out(t);
-                kf.zoom - (kf.zoom - 1.0) * eased_t
-            };
-
-            return (zoom, kf.center_x, kf.center_y);
+            current_idx = Some(i);
+            break;
         }
     }
 
-    // No zoom active
+    if let Some(idx) = current_idx {
+        let kf = &keyframes[idx];
+        let zoom_in_end = kf.start_time + config.zoom_duration;
+        let hold_end = zoom_in_end + config.hold_duration;
+
+        // Zoom Interpolation
+        let zoom = if time_secs < zoom_in_end {
+            let t = (time_secs - kf.start_time) / config.zoom_duration;
+            let eased_t = ease_in_out(t);
+            1.0 + (kf.zoom - 1.0) * eased_t
+        } else if time_secs < hold_end {
+            kf.zoom
+        } else {
+            let t = (time_secs - hold_end) / config.zoom_duration;
+            let eased_t = ease_in_out(t);
+            kf.zoom - (kf.zoom - 1.0) * eased_t
+        };
+
+        // Center Interpolation (Panning)
+        // If this is not the first keyframe, pan from the previous click center
+        let (start_cx, start_cy) = if idx > 0 {
+            (keyframes[idx - 1].center_x, keyframes[idx - 1].center_y)
+        } else {
+            (0.5, 0.5)
+        };
+
+        // Pan follows the zoom-in duration
+        let pan_t = ((time_secs - kf.start_time) / config.zoom_duration).clamp(0.0, 1.0);
+        let eased_pan_t = ease_in_out(pan_t);
+
+        let cx = start_cx + (kf.center_x - start_cx) * eased_pan_t;
+        let cy = start_cy + (kf.center_y - start_cy) * eased_pan_t;
+
+        return (zoom, cx, cy);
+    }
+
+    // No zoom active - return to center slowly if we just finished a keyframe
+    // TODO: Implement "return to center" panning
     (1.0, 0.5, 0.5)
 }
 
@@ -154,36 +177,7 @@ fn ease_in_out(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Apply zoom effect to a frame
-fn apply_zoom_to_frame(
-    frame: &ImageBuffer<Rgb<u8>, Vec<u8>>,
-    zoom: f32,
-    center_x: f32,
-    center_y: f32,
-) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
-    if (zoom - 1.0).abs() < 0.01 {
-        // No zoom, return as-is
-        return frame.clone();
-    }
-
-    let (width, height) = frame.dimensions();
-
-    // Calculate crop rectangle (inverse zoom = crop)
-    let crop_width = (width as f32 / zoom) as u32;
-    let crop_height = (height as f32 / zoom) as u32;
-
-    // Center the crop on the click point
-    let center_px_x = (center_x * width as f32) as i32;
-    let center_px_y = (center_y * height as f32) as i32;
-
-    let crop_x = (center_px_x - crop_width as i32 / 2).clamp(0, (width - crop_width) as i32) as u32;
-    let crop_y =
-        (center_px_y - crop_height as i32 / 2).clamp(0, (height - crop_height) as i32) as u32;
-
-    // Crop and scale back to original size
-    let cropped = imageops::crop_imm(frame, crop_x, crop_y, crop_width, crop_height).to_image();
-    imageops::resize(&cropped, width, height, imageops::FilterType::Lanczos3)
-}
+// apply_zoom_to_frame removed in favor of RenderEngine
 
 /// Apply post-processing using video-rs
 pub fn apply_zoom_effects(
@@ -192,7 +186,6 @@ pub fn apply_zoom_effects(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use video_rs::decode::Decoder;
     use video_rs::encode::{Encoder, Settings};
-    use video_rs::time::Time;
 
     println!("Running video-rs post-processing...");
 
@@ -237,6 +230,13 @@ pub fn apply_zoom_effects(
 
     println!("Starting frame processing...");
 
+    // Initialize GPU Render Engine
+    let mut render_engine = pollster::block_on(RenderEngine::new(width as u32, height as u32))?;
+
+    let mut current_zoom = 1.0;
+    let mut current_cx = 0.5;
+    let mut current_cy = 0.5;
+
     // Process each frame
     for frame_result in decoder.decode_iter() {
         let (time, frame) = match frame_result {
@@ -244,66 +244,80 @@ pub fn apply_zoom_effects(
             Err(e) => {
                 let err_str = e.to_string();
                 if err_str.contains("exhausted") {
-                    // End of video stream - this is normal, break the loop
                     println!("End of video stream at frame {}", processed);
                     break;
                 }
                 println!("Error decoding frame {}: {}", processed, e);
-                continue; // Skip bad frames
+                continue;
             }
         };
         let time_secs = time.as_secs() as f32;
 
-        // Calculate zoom at this time
-        let (zoom, cx, cy) = calculate_zoom_at_time(time_secs, &keyframes, config);
+        let prev_zoom = current_zoom;
+        let prev_cx = current_cx;
+        let prev_cy = current_cy;
 
-        // Convert frame to image - video-rs frame is ndarray
-        // Get the raw data from the ndarray frame
-        let frame_slice = match frame.as_slice() {
-            Some(s) => s,
-            None => {
-                println!("Frame {} not contiguous, skipping", processed);
-                continue;
+        // Calculate camera state at this time
+        let (zoom, cx, cy) = calculate_camera_at_time(time_secs, &keyframes, config);
+        current_zoom = zoom;
+        current_cx = cx;
+        current_cy = cy;
+
+        // OPTIMIZATION: If no zoom needed AND we wasn't zooming before, pass through original frame directly
+        if (zoom - 1.0).abs() < 0.001 && (prev_zoom - 1.0).abs() < 0.001 {
+            if let Err(e) = encoder.encode(&frame, time) {
+                println!("Error encoding passthrough frame {}: {}", processed, e);
             }
+            processed += 1;
+            if processed % 100 == 0 {
+                print!("\rProcessed {} frames (passthrough)...", processed);
+                std::io::Write::flush(&mut std::io::stdout())?;
+            }
+            continue;
+        }
+
+        // GPU PATH: Frame needs zoom/pan/blur processing
+        // Prepare uniforms
+        let uniforms = RenderUniforms {
+            zoom: current_zoom,
+            center_x: current_cx,
+            center_y: current_cy,
+            aspect: width as f32 / height as f32,
+            blur_samples: 5.0, // 5 samples for decent quality
+            prev_center_x: prev_cx,
+            prev_center_y: prev_cy,
+            prev_zoom: prev_zoom,
+            width: width as f32,
+            height: height as f32,
         };
 
-        // video-rs gives us RGB data, convert to image
-        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
-            match ImageBuffer::from_raw(width as u32, height as u32, frame_slice.to_vec()) {
-                Some(i) => i,
-                None => {
-                    println!("Failed to create image buffer for frame {}", processed);
-                    continue;
-                }
-            };
+        // Convert ndarray RGB to RGBA for WGPU
+        let frame_rgb = frame.as_slice().ok_or("Frame not contiguous")?;
+        let mut frame_rgba = Vec::with_capacity((width * height * 4) as usize);
+        for chunk in frame_rgb.chunks_exact(3) {
+            frame_rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
+        }
 
-        // Apply zoom
-        let zoomed = apply_zoom_to_frame(&img, zoom, cx, cy);
+        // Process with GPU
+        let processed_rgba = render_engine.process_frame(&frame_rgba, &uniforms)?;
 
-        // Convert back to ndarray for encoding
-        let zoomed_data: Vec<u8> = zoomed.into_raw();
-        let zoomed_frame = match video_rs::Frame::from_shape_vec(
-            (height as usize, width as usize, 3),
-            zoomed_data,
-        ) {
-            Ok(f) => f,
-            Err(e) => {
-                println!("Failed to create frame {}: {}", processed, e);
-                continue;
-            }
-        };
+        // Convert back to RGB for video-rs encoding
+        let mut processed_rgb = Vec::with_capacity((width * height * 3) as usize);
+        for chunk in processed_rgba.chunks_exact(4) {
+            processed_rgb.extend_from_slice(&[chunk[0], chunk[1], chunk[2]]);
+        }
 
-        // Encode frame with ORIGINAL source timestamp (key for correct timing!)
+        let zoomed_frame =
+            video_rs::Frame::from_shape_vec((height as usize, width as usize, 3), processed_rgb)?;
+
+        // Encode frame
         if let Err(e) = encoder.encode(&zoomed_frame, time) {
             println!("Error encoding frame {}: {}", processed, e);
-            // Continue anyway, don't fail the whole video
         }
 
         processed += 1;
-
-        // Progress every 30 frames
         if processed % 30 == 0 {
-            print!("\rProcessed {} frames...", processed);
+            print!("\rProcessed {} frames (GPU)...", processed);
             std::io::Write::flush(&mut std::io::stdout())?;
         }
     }
