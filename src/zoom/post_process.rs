@@ -400,6 +400,11 @@ pub fn apply_zoom_effects(
         ..Default::default()
     };
 
+    // Pre-allocate system RAM buffers for RGB/RGBA conversions to avoid OOM/fragmentation at 4K
+    let mut frame_rgba = vec![0u8; (width * height * 4) as usize];
+    let mut processed_rgba = vec![0u8; (width * height * 4) as usize];
+    let mut processed_rgb = vec![0u8; (width * height * 3) as usize];
+
     // Process each frame
     for frame_result in decoder.decode_iter() {
         let (time, frame) = match frame_result {
@@ -470,29 +475,39 @@ pub fn apply_zoom_effects(
             height: height as f32,
         };
 
-        // Convert ndarray RGB to RGBA for WGPU
+        // Efficiently convert ndarray RGB to RGBA for WGPU using pre-allocated buffer
         let frame_rgb = frame.as_slice().ok_or("Frame not contiguous")?;
-        let mut frame_rgba = Vec::with_capacity((width * height * 4) as usize);
-        for chunk in frame_rgb.chunks_exact(3) {
-            frame_rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
+        for (i, chunk) in frame_rgb.chunks_exact(3).enumerate() {
+            let offset = i * 4;
+            frame_rgba[offset] = chunk[0];
+            frame_rgba[offset + 1] = chunk[1];
+            frame_rgba[offset + 2] = chunk[2];
+            frame_rgba[offset + 3] = 255;
         }
 
-        // Process with GPU
-        let processed_rgba = render_engine.process_frame(&frame_rgba, &uniforms)?;
+        // 3. Process with GPU (Zero Allocation Pipeline)
+        render_engine.process_frame(&frame_rgba, &uniforms, &mut processed_rgba)?;
 
-        // Convert back to RGB for video-rs encoding
-        let mut processed_rgb = Vec::with_capacity((width * height * 3) as usize);
-        for chunk in processed_rgba.chunks_exact(4) {
-            processed_rgb.extend_from_slice(&[chunk[0], chunk[1], chunk[2]]);
+        // 4. Convert back to RGB for video-rs using pre-allocated buffer
+        for (i, chunk) in processed_rgba.chunks_exact(4).enumerate() {
+            let offset = i * 3;
+            processed_rgb[offset] = chunk[0];
+            processed_rgb[offset + 1] = chunk[1];
+            processed_rgb[offset + 2] = chunk[2];
         }
 
-        let zoomed_frame =
-            video_rs::Frame::from_shape_vec((height as usize, width as usize, 3), processed_rgb)?;
+        let zoomed_frame = video_rs::Frame::from_shape_vec(
+            (height as usize, width as usize, 3),
+            processed_rgb, // Pass ownership
+        )?;
 
-        // Encode frame
+        // 5. Encode frame
         if let Err(e) = encoder.encode(&zoomed_frame, time) {
             println!("Error encoding frame {}: {}", processed, e);
         }
+
+        // 6. Reclaim the buffer from ndarray to avoid allocation in the next frame
+        processed_rgb = zoomed_frame.into_raw_vec_and_offset().0;
 
         processed += 1;
         if processed % 30 == 0 {

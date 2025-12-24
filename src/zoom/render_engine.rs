@@ -34,10 +34,15 @@ pub struct RenderEngine {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
-    texture_bind_group_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
     width: u32,
     height: u32,
+
+    // Pre-allocated resources for 4K performance
+    input_texture: wgpu::Texture,
+    output_texture: wgpu::Texture,
+    output_buffer: wgpu::Buffer,
+    texture_bind_group: wgpu::BindGroup,
+    output_view: wgpu::TextureView,
 }
 
 impl RenderEngine {
@@ -59,7 +64,12 @@ impl RenderEngine {
                 &wgpu::DeviceDescriptor {
                     label: Some("DemoRecorder Render Device"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
+                    required_limits: wgpu::Limits {
+                        // Ensure we can handle 4K buffers and large allocations
+                        max_buffer_size: 512 * 1024 * 1024, // 512MB
+                        max_storage_buffer_binding_size: 512 * 1024 * 1024,
+                        ..wgpu::Limits::default()
+                    },
                     memory_hints: wgpu::MemoryHints::default(),
                 },
                 None,
@@ -171,34 +181,15 @@ impl RenderEngine {
             cache: None,
         });
 
-        Ok(Self {
-            device,
-            queue,
-            pipeline,
-            uniform_buffer,
-            uniform_bind_group,
-            texture_bind_group_layout,
-            sampler,
+        // Pre-allocate frame resources to avoid VRAM fragmentation/OOM at 4K
+        let texture_extent = wgpu::Extent3d {
             width,
             height,
-        })
-    }
-
-    #[tracing::instrument(skip(self, data, uniforms))]
-    pub fn process_frame(
-        &mut self,
-        data: &[u8],
-        uniforms: &RenderUniforms,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        // 1. Create input texture from frame data
-        let texture_extent = wgpu::Extent3d {
-            width: self.width,
-            height: self.height,
             depth_or_array_layers: 1,
         };
 
-        let input_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Input Frame"),
+        let input_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Input Frame Texture"),
             size: texture_extent,
             mip_level_count: 1,
             sample_count: 1,
@@ -208,9 +199,74 @@ impl RenderEngine {
             view_formats: &[],
         });
 
+        let output_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Output Frame Texture"),
+            size: texture_extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+
+        let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Output Readback Buffer"),
+            size: (width * height * 4) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let input_view = input_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Texture Bind Group"),
+            layout: &texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&input_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+
+        Ok(Self {
+            device,
+            queue,
+            pipeline,
+            uniform_buffer,
+            uniform_bind_group,
+            width,
+            height,
+            input_texture,
+            output_texture,
+            output_buffer,
+            texture_bind_group,
+            output_view,
+        })
+    }
+
+    pub fn process_frame(
+        &mut self,
+        data: &[u8],
+        uniforms: &RenderUniforms,
+        output_data: &mut [u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let texture_extent = wgpu::Extent3d {
+            width: self.width,
+            height: self.height,
+            depth_or_array_layers: 1,
+        };
+
+        // 1. Upload frame data to pre-allocated input texture
         self.queue.write_texture(
             wgpu::ImageCopyTexture {
-                texture: &input_texture,
+                texture: &self.input_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -224,49 +280,11 @@ impl RenderEngine {
             texture_extent,
         );
 
-        let input_view = input_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let texture_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Texture Bind Group"),
-            layout: &self.texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&input_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-
-        // 2. Output texture for rendering
-        let output_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Output Frame"),
-            size: texture_extent,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        // 3. Buffer for reading back data
-        let output_buffer_desc = wgpu::BufferDescriptor {
-            label: Some("Output Readback Buffer"),
-            size: (self.width * self.height * 4) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        };
-        let output_buffer = self.device.create_buffer(&output_buffer_desc);
-
-        // 4. Update uniforms
+        // 2. Update uniforms
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[*uniforms]));
 
-        // 5. Encode and submit commands
+        // 3. Render and copy to readback buffer
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -277,7 +295,7 @@ impl RenderEngine {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &output_view,
+                    view: &self.output_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -291,19 +309,19 @@ impl RenderEngine {
 
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            render_pass.set_bind_group(1, &texture_bind_group, &[]);
-            render_pass.draw(0..6, 0..1); // Full screen quad
+            render_pass.set_bind_group(1, &self.texture_bind_group, &[]);
+            render_pass.draw(0..6, 0..1);
         }
 
         encoder.copy_texture_to_buffer(
             wgpu::ImageCopyTexture {
-                texture: &output_texture,
+                texture: &self.output_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::ImageCopyBuffer {
-                buffer: &output_buffer,
+                buffer: &self.output_buffer,
                 layout: wgpu::ImageDataLayout {
                     offset: 0,
                     bytes_per_row: Some(4 * self.width),
@@ -315,18 +333,20 @@ impl RenderEngine {
 
         self.queue.submit(std::iter::once(encoder.finish()));
 
-        // 6. Map and read back
-        let buffer_slice = output_buffer.slice(..);
+        // 4. Map and read back - zero allocation!
+        let buffer_slice = self.output_buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+        buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
+            let _ = tx.send(v);
+        });
         self.device.poll(wgpu::Maintain::Wait);
 
-        if rx.recv().unwrap().is_ok() {
+        if rx.recv()?.is_ok() {
             let data = buffer_slice.get_mapped_range();
-            let result = data.to_vec();
+            output_data.copy_from_slice(&data); // Zero-allocation read!
             drop(data);
-            output_buffer.unmap();
-            Ok(result)
+            self.output_buffer.unmap();
+            Ok(())
         } else {
             Err("Failed to map output buffer".into())
         }
