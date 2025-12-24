@@ -19,9 +19,16 @@ pub fn init_diagnostics() -> WorkerGuard {
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
     tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
-        .with(fmt::layer().with_writer(std::io::stdout)) // Console output
-        .with(fmt::layer().with_writer(non_blocking).with_ansi(false)) // File output
+        .with(
+            EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into())
+                .add_directive("demo_recorder=debug".parse().unwrap()) // Enable debug for our code
+                .add_directive("wgpu=warn".parse().unwrap()) // Silence WGPU
+                .add_directive("wgpu_hal=warn".parse().unwrap()) // Silence WGPU HAL
+                .add_directive("video_rs=warn".parse().unwrap()), // Silence Video-RS
+        )
+        .with(fmt::layer().with_writer(std::io::stdout)) // Console
+        .with(fmt::layer().with_writer(non_blocking).with_ansi(false)) // File
         .init();
 
     guard

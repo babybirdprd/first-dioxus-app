@@ -117,10 +117,42 @@ fn merge_overlapping_keyframes(keyframes: &mut Vec<ZoomKeyframe>) {
     }
 }
 
+/// Finds the nearest cursor position at a given time from the event log
+fn get_cursor_pos_at(time_secs: f32, log: &EventLog) -> (f32, f32) {
+    let mut nearest_pos = (0.5, 0.5);
+    let mut min_diff = f32::MAX;
+
+    let screen_width = log.metadata.width as f32;
+    let screen_height = log.metadata.height as f32;
+
+    for event in &log.events {
+        let (x, y, timestamp_ms) = match event {
+            RecordedEvent::Click { x, y, timestamp_ms } => (*x, *y, *timestamp_ms),
+            RecordedEvent::CursorMove { x, y, timestamp_ms } => (*x, *y, *timestamp_ms),
+        };
+
+        let event_time = timestamp_ms as f32 / 1000.0;
+        let diff = (time_secs - event_time).abs();
+
+        if diff < min_diff {
+            min_diff = diff;
+            nearest_pos = (x as f32 / screen_width, y as f32 / screen_height);
+        }
+
+        // Cursors are sorted by time, so we can stop early if we pass the target time
+        if event_time > time_secs + 0.5 {
+            break;
+        }
+    }
+
+    nearest_pos
+}
+
 /// Calculate camera state at a given time using "Magnetic Camera" interpolation
 fn calculate_camera_at_time(
     time_secs: f32,
     keyframes: &[ZoomKeyframe],
+    log: &EventLog,
     config: &PostProcessConfig,
 ) -> (f32, f32, f32) {
     // Returns (zoom_level, center_x, center_y)
@@ -168,8 +200,19 @@ fn calculate_camera_at_time(
         let pan_t = ((time_secs - kf.start_time) / config.zoom_duration).clamp(0.0, 1.0);
         let eased_pan_t = ease_in_out(pan_t);
 
-        let cx = start_cx + (kf.center_x - start_cx) * eased_pan_t;
-        let cy = start_cy + (kf.center_y - start_cy) * eased_pan_t;
+        let mut cx = start_cx + (kf.center_x - start_cx) * eased_pan_t;
+        let mut cy = start_cy + (kf.center_y - start_cy) * eased_pan_t;
+
+        // "Cursor Follow" - Magnetic drift towards the live cursor during the hold phase
+        if time_secs > zoom_in_end && time_secs < hold_end {
+            let (cur_x, cur_y) = get_cursor_pos_at(time_secs, log);
+
+            // Apply a 30% magnetic pull towards the cursor
+            // This makes the camera feel "alive" and follow the action
+            let follow_intensity = 0.35;
+            cx = cx + (cur_x - cx) * follow_intensity;
+            cy = cy + (cur_y - cy) * follow_intensity;
+        }
 
         tracing::debug!(
             time = %format!("{:.3}", time_secs),
@@ -188,9 +231,12 @@ fn calculate_camera_at_time(
 
 /// Smooth ease in/out curve
 fn ease_in_out(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    // Smooth step function
-    t * t * (3.0 - 2.0 * t)
+    // Cubic easing for smoother transitions
+    if t < 0.5 {
+        4.0 * t * t * t
+    } else {
+        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+    }
 }
 
 // apply_zoom_to_frame removed in favor of RenderEngine
@@ -269,14 +315,14 @@ pub fn apply_zoom_effects(
                 continue;
             }
         };
-        let time_secs = time.as_secs() as f32;
+        let time_secs = time.as_secs_f64() as f32;
 
         let prev_zoom = current_zoom;
         let prev_cx = current_cx;
         let prev_cy = current_cy;
 
         // Calculate camera state at this time
-        let (zoom, cx, cy) = calculate_camera_at_time(time_secs, &keyframes, config);
+        let (zoom, cx, cy) = calculate_camera_at_time(time_secs, &keyframes, log, config);
         current_zoom = zoom;
         current_cx = cx;
         current_cy = cy;
